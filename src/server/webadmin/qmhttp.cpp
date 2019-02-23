@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2014-2015 Calle Laakkonen
+   Copyright (C) 2014-2018 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -24,6 +24,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QUrl>
+#include <QDateTime>
 
 #include <microhttpd.h>
 
@@ -79,6 +80,15 @@ struct RequestContext {
 			MHD_destroy_post_processor(postprocessor);
 	}
 };
+
+static void logMessage(MHD_Connection *connection, int statusCode, const char *method, const char *url)
+{
+	QHostAddress clientAddress(MHD_get_connection_info(connection, MHD_CONNECTION_INFO_CLIENT_ADDRESS)->client_addr);
+
+	qInfo("%s HTTP(%d) %s \"%s %s\"",
+			qPrintable(QDateTime::currentDateTime().toString(Qt::ISODate)),
+			statusCode, qPrintable(clientAddress.toString()), method, url);
+}
 
 int iterate_post(void *con_cls, enum MHD_ValueKind kind, const char *key, const char *filename, const char *content_type, const char *transfer_encoding, const char *data, uint64_t off, size_t size)
 {
@@ -136,8 +146,10 @@ int request_handler(void *cls, MHD_Connection *connection, const char *url, cons
 			method = HttpRequest::PUT;
 		else if(qstrcmp(methodstr, "DELETE")==0)
 			method = HttpRequest::DELETE;
-		else
+		else {
+			logMessage(connection, 405, methodstr, url);
 			return MHD_NO;
+		}
 
 		// Demand authentication if basic auth is enabled
 		if(!d->baPass.isEmpty()) {
@@ -145,6 +157,7 @@ int request_handler(void *cls, MHD_Connection *connection, const char *url, cons
 			user = MHD_basic_auth_get_username_password(connection, &pass);
 			if(user != d->baUser || pass != d->baPass) {
 				// Invalid username or password
+				logMessage(connection, 401, methodstr, url);
 				return MHD_queue_basic_auth_fail_response(connection, d->baRealm.toUtf8().constData(), d->response401);
 			}
 
@@ -166,6 +179,7 @@ int request_handler(void *cls, MHD_Connection *connection, const char *url, cons
 
 		// Send 404 error immediately if no handler was found
 		if(!reqhandler) {
+			logMessage(connection, 404, methodstr, url);
 			return MHD_queue_response(connection, MHD_HTTP_NOT_FOUND, d->response404);
 		}
 
@@ -189,6 +203,7 @@ int request_handler(void *cls, MHD_Connection *connection, const char *url, cons
 				ctx->postprocessor = MHD_create_post_processor(connection, 32*1024, iterate_post, ctx);
 				if(!ctx->postprocessor) {
 					delete ctx;
+					logMessage(connection, 500, methodstr, url);
 					return MHD_NO;
 				}
 			}
@@ -223,6 +238,8 @@ int request_handler(void *cls, MHD_Connection *connection, const char *url, cons
 	HttpResponse response = reqctx->reqhandler(reqctx->request);
 	MHD_Response *mhdresponse;
 	int ret;
+
+	logMessage(connection, response.code(), methodstr, url);
 
 	mhdresponse = MHD_create_response_from_buffer(response.body().length(), const_cast<char*>(response.body().data()), MHD_RESPMEM_MUST_COPY);
 
@@ -282,12 +299,30 @@ bool MicroHttpd::listen(quint16 port)
 	return true;
 }
 
+bool MicroHttpd::listenFd(int fd)
+{
+	Q_ASSERT(!_d->mhd);
+	qInfo("Starting microhttpd on pre-opened socket");
+
+	_d->mhd = MHD_start_daemon(MHD_USE_DEBUG | MHD_USE_SELECT_INTERNALLY, 0,
+			&access_policy, _d,
+			&request_handler, _d,
+			MHD_OPTION_NOTIFY_COMPLETED, request_completed, 0,
+			MHD_OPTION_LISTEN_SOCKET, fd,
+			MHD_OPTION_END);
+	if(!_d->mhd) {
+		qWarning("Error starting microhttpd");
+		return false;
+	}
+	return true;
+}
+
 void MicroHttpd::stop()
 {
 	if(_d->mhd) {
 		qInfo("Stopping microhttpd");
 		MHD_stop_daemon(_d->mhd);
-		_d->mhd = 0;
+		_d->mhd = nullptr;
 	}
 }
 
@@ -306,6 +341,11 @@ void MicroHttpd::setBasicAuth(const QString &realm, const QString &username, con
 	_d->baRealm = realm;
 	_d->baUser = username;
 	_d->baPass = password;
+}
+
+QString MicroHttpd::version()
+{
+	return QString::fromUtf8(MHD_get_version());
 }
 
 HttpResponse HttpResponse::HtmlResponse(const QString &html)

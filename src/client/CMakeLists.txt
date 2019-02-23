@@ -1,13 +1,7 @@
-find_package(Qt5Core REQUIRED)
 find_package(Qt5Gui REQUIRED)
-find_package(Qt5Network REQUIRED)
-find_package(Qt5Concurrent REQUIRED)
 find_package(Qt5Svg REQUIRED)
 find_package(Qt5LinguistTools)
-find_package(KF5Archive REQUIRED NO_MODULE)
-find_package(KF5DNSSD NO_MODULE)
-find_package(GIF)
-find_package(Miniupnpc)
+find_package(Vpx)
 
 set (
 	SOURCES
@@ -16,12 +10,15 @@ set (
 	tools/toolproperties.cpp
 	tools/utils.cpp
 	tools/annotation.cpp
-	tools/brushes.cpp
+	tools/freehand.cpp
 	tools/colorpicker.cpp
 	tools/laser.cpp
 	tools/selection.cpp
 	tools/shapetools.cpp
+	tools/beziertool.cpp
 	tools/floodfill.cpp
+	tools/strokesmoother.cpp
+	tools/zoom.cpp
 	canvas/statetracker.cpp
 	canvas/canvasmodel.cpp
 	canvas/selection.cpp
@@ -33,6 +30,7 @@ set (
 	canvas/userlist.cpp
 	canvas/layerlist.cpp
 	canvas/history.cpp
+	canvas/canvassaverrunnable.cpp
 	net/client.cpp
 	net/server.cpp
 	net/loopbackserver.cpp
@@ -43,11 +41,11 @@ set (
 	net/builtinserver.cpp
 	net/sessionlistingmodel.cpp
 	net/banlistmodel.cpp
+	net/announcementlist.cpp
 	net/commands.cpp
 	utils/archive.cpp
 	utils/palette.cpp
 	utils/palettelistmodel.cpp
-	utils/strokesmoother.cpp
 	utils/html.cpp
 	utils/usernamevalidator.cpp
 	utils/sessionidvalidator.cpp
@@ -59,16 +57,27 @@ set (
 	utils/listservermodel.cpp
 	utils/settings.cpp
 	utils/icon.cpp
+	utils/logging.cpp
+	utils/passwordstore.cpp
+	utils/identicon.cpp
+	utils/avatarlistmodel.cpp
+	utils/sessionfilterproxymodel.cpp
 	core/annotationmodel.cpp
 	core/tile.cpp
 	core/layer.cpp
 	core/layerstack.cpp
-	core/brush.cpp
 	core/brushmask.cpp
 	core/blendmodes.cpp
 	core/rasterop.cpp
-	core/shapes.cpp
 	core/floodfill.cpp
+	core/tilevector.cpp
+	brushes/brushengine.cpp
+	brushes/brushpainter.cpp
+	brushes/classicbrushstate.cpp
+	brushes/classicbrushpainter.cpp
+	brushes/pixelbrushstate.cpp
+	brushes/pixelbrushpainter.cpp
+	brushes/shapes.cpp
 	ora/orawriter.cpp
 	ora/orareader.cpp
 	recording/index.cpp
@@ -79,9 +88,10 @@ set (
 	export/animation.cpp
 	export/videoexporter.cpp
 	export/imageseriesexporter.cpp
-	export/ffmpegexporter.cpp
 	parentalcontrols/parentalcontrols.cpp
 )
+
+include_directories(bundled)
 
 if(WIN32)
 	set(SOURCES ${SOURCES} parentalcontrols/parentalcontrols_win.cpp)
@@ -108,6 +118,16 @@ if(KF5DNSSD_FOUND)
 	add_definitions(-DHAVE_DNSSD)
 endif()
 
+if(LIBVPX_FOUND)
+	set(
+		SOURCES ${SOURCES}
+		bundled/mkvmuxer/mkvmuxer.cc
+		bundled/mkvmuxer/mkvmuxerutil.cc
+		export/webmexporter.cpp
+		export/webmencoder.cpp
+	)
+endif(LIBVPX_FOUND)
+
 if( Qt5LinguistTools_FOUND)
 	set(TRANSLATIONS
 		i18n/drawpile_fi.ts
@@ -123,11 +143,12 @@ endif()
 
 add_library (
 	${DPCLIENTLIB}
+	STATIC
 	${SOURCES}
 	${QM_TRANSLATIONS}
 )
 
-target_link_libraries(${DPCLIENTLIB} ${DPSHAREDLIB} Qt5::Gui Qt5::Network Qt5::Concurrent)
+target_link_libraries(${DPCLIENTLIB} ${DPSHAREDLIB} Qt5::Gui Qt5::Network)
 
 if(KF5DNSSD_FOUND) 
 	target_link_libraries(${DPCLIENTLIB} KF5::DNSSD)
@@ -144,6 +165,10 @@ if(LIBMINIUPNPC_FOUND)
 	endif ( WIN32 )
 endif()
 
+if(LIBVPX_FOUND)
+	target_link_libraries(${DPCLIENTLIB} ${LIBVPX_LIBRARIES})
+endif(LIBVPX_FOUND)
+
 if ( WIN32 )
 	target_link_libraries (${DPCLIENTLIB} ws2_32)
 endif ()
@@ -151,4 +176,8 @@ endif ()
 if( QM_TRANSLATIONS )
 	install( FILES ${QM_TRANSLATIONS} DESTINATION "${CMAKE_INSTALL_PREFIX}/share/drawpile/drawpile/i18n" )
 endif( QM_TRANSLATIONS)
+
+if(TESTS)
+    add_subdirectory(tests)
+endif(TESTS)
 

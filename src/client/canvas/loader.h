@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2013-2015 Calle Laakkonen
+   Copyright (C) 2013-2018 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -102,7 +102,7 @@ public:
 	QList<protocol::MessagePtr> loadInitCommands();
 	QString filename() const { return m_filename; }
 	QString errorMessage() const { return m_error; }
-	QString warningMessage() const { return m_error; }
+	QString warningMessage() const { return m_warning; }
 
 private:
 	QString m_filename;
@@ -112,14 +112,14 @@ private:
 
 class QImageCanvasLoader : public SessionLoader {
 public:
-	QImageCanvasLoader(const QImage &image) : _image(image) {}
+	QImageCanvasLoader(const QImage &image) : m_image(image) {}
 
 	QList<protocol::MessagePtr> loadInitCommands();
 	QString filename() const { return QString(); }
 	QString errorMessage() const { return QString(); }
 
 private:
-	QImage _image;
+	QImage m_image;
 };
 
 /**
@@ -129,7 +129,14 @@ private:
  */
 class SnapshotLoader : public SessionLoader {
 public:
-	SnapshotLoader(uint8_t contextId, const paintcore::LayerStack *layers, const canvas::CanvasModel *session=nullptr)
+	/**
+	 * Construct a snapshot from an existing session.
+	 *
+	 * @param context ID resetting user ID
+	 * @param layers the layer stack (required)
+	 * @param session the current canvas. Used for session ACLs and such. (optional)
+	 */
+	SnapshotLoader(uint8_t contextId, const paintcore::LayerStack *layers, const canvas::CanvasModel *session)
 		: m_layers(layers), m_session(session), m_contextId(contextId) {}
 
 	QList<protocol::MessagePtr> loadInitCommands();
@@ -138,7 +145,7 @@ public:
 
 private:
 	const paintcore::LayerStack *m_layers;
-	const canvas::CanvasModel *m_session;
+	const CanvasModel *m_session;
 	uint8_t m_contextId;
 };
 

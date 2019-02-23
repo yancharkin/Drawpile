@@ -69,8 +69,12 @@ ServerReply ServerReply::fromJson(const QJsonDocument &doc)
 		r.type = SESSIONCONF;
 	else if(typestr == "sizelimit")
 		r.type = SIZELIMITWARNING;
+	else if(typestr == "status")
+		r.type = STATUS;
 	else if(typestr == "reset")
 		r.type = RESET;
+	else if(typestr == "autoreset")
+		r.type = RESETREQUEST;
 	else if(typestr == "catchup")
 		r.type = CATCHUP;
 	else
@@ -95,8 +99,10 @@ QJsonDocument ServerReply::toJson() const
 	case LOG: typestr=QStringLiteral("log"); break;
 	case SESSIONCONF: typestr=QStringLiteral("sessionconf"); break;
 	case SIZELIMITWARNING: typestr=QStringLiteral("sizelimit"); break;
+	case STATUS: typestr=QStringLiteral("status"); break;
 	case RESET: typestr=QStringLiteral("reset"); break;
 	case CATCHUP: typestr=QStringLiteral("catchup"); break;
+	case RESETREQUEST: typestr=QStringLiteral("autoreset"); break;
 	}
 	o["type"] = typestr;
 
@@ -120,13 +126,14 @@ Command *Command::deserialize(uint8_t ctxid, const uchar *data, uint len)
 
 int Command::serializePayload(uchar *data) const
 {
-	memcpy(data, m_msg.constData(), m_msg.length());
-	return m_msg.length();
+	const int len = payloadLength();
+	memcpy(data, m_msg.constData(), len);
+	return len;
 }
 
 int Command::payloadLength() const
 {
-	return m_msg.length();
+	return qMin(0xffff, m_msg.length());
 }
 
 QJsonDocument Command::doc() const

@@ -60,9 +60,22 @@ public:
 	 *
 	 */
 	void start(quint16 port);
+	void startFd(int fd);
+
+	/**
+	 * @brief Restart the server
+	 */
+	Q_SLOT void restart();
+
+	/**
+	 * @brief Get libmicrohttpd's version number
+	 */
+	static QString version();
 
 private:
 	MicroHttpd *m_server;
+	int m_port;
+	enum { NOTSTARTED, PORT, FD } m_mode;
 };
 
 }

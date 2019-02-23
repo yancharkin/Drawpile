@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2006-2017 Calle Laakkonen
+   Copyright (C) 2006-2018 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -27,21 +27,34 @@ class QPolygon;
 
 namespace tools {
 
-//! Base class for selection tools
+/**
+ * @brief Base class for selection tool
+ *
+ * These are used for selecting regions for copying & pasting, as well
+ * as filling regions with solid color.
+ */
 class SelectionTool : public Tool {
 public:
 	SelectionTool(ToolController &owner, Type type, QCursor cursor)
-		: Tool(owner, type,  cursor) { }
+		: Tool(owner, type,  cursor), m_allowTransform(true) { }
 
-	void begin(const paintcore::Point& point, float zoom);
-	void motion(const paintcore::Point& point, bool constrain, bool center);
-	void end();
+	void begin(const paintcore::Point& point, bool right, float zoom) override;
+	void motion(const paintcore::Point& point, bool constrain, bool center) override;
+	void end() override;
+
+	void finishMultipart() override;
+	void cancelMultipart() override;
+	void undoMultipart() override;
+	bool isMultipart() const override;
 
 	//! Start a layer region move operation
 	void startMove();
 
+	//! Allow selection moving and resizing
+	void setTransformEnabled(bool enable) { m_allowTransform = enable; }
+
 	static QImage transformSelectionImage(const QImage &source, const QPolygon &target, QPoint *offset);
-	static QImage shapeMask(const QColor &color, const QPolygon &selection, QPoint *offset, bool mono=false);
+	static QImage shapeMask(const QColor &color, const QPolygonF &selection, QRect *maskBounds, bool mono=false);
 
 protected:
 	virtual void initSelection(canvas::Selection *selection) = 0;
@@ -49,13 +62,12 @@ protected:
 
 	QPointF m_start, m_p1;
 	canvas::Selection::Handle m_handle;
+
+private:
+	bool m_allowTransform;
 };
 
-/**
- * @brief Selection tool
- *
- * This is used for selecting regions for copying & pasting.
- */
+
 class RectangleSelection : public SelectionTool {
 public:
 	RectangleSelection(ToolController &owner);
@@ -65,11 +77,10 @@ protected:
 	void newSelectionMotion(const paintcore::Point &point, bool constrain, bool center);
 };
 
+
 class PolygonSelection : public SelectionTool {
 public:
 	PolygonSelection(ToolController &owner);
-
-	void end();
 
 protected:
 	void initSelection(canvas::Selection *selection);

@@ -1,7 +1,7 @@
 /*
   Drawpile - a collaborative drawing program.
 
-  Copyright (C) 2015-2017 Calle Laakkonen
+  Copyright (C) 2015-2018 Calle Laakkonen
 
   Drawpile is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -30,12 +30,12 @@ class QImage;
 namespace paintcore {
 
 struct Annotation {
-	int id;
+	uint16_t id;
 	QString text;
 	QRect rect;
 	QColor background;
 	bool protect;
-	int valign;
+	uint8_t valign;
 
 	enum Handle {OUTSIDE, TRANSLATE, RS_TOPLEFT, RS_TOPRIGHT, RS_BOTTOMRIGHT, RS_BOTTOMLEFT, RS_TOP, RS_RIGHT, RS_BOTTOM, RS_LEFT};
 	static const int HANDLE_SIZE = 10;
@@ -55,6 +55,9 @@ struct Annotation {
 
 	//! Get the ID of the user who created this annotation
 	uint8_t userId() const { return id>>8; }
+
+	//! Get the protocol flags for this annotation
+	uint8_t flags() const;
 
 	//! Get the name of the vertical-align setting
 	QString valignToString() const;
@@ -80,6 +83,8 @@ public:
 
 	explicit AnnotationModel(QObject *parent=nullptr);
 
+	AnnotationModel *clone(QObject *newParent=nullptr) const { return new AnnotationModel(this, newParent); }
+
 	int rowCount(const QModelIndex &parent=QModelIndex()) const;
 	QVariant data(const QModelIndex &index, int role=Qt::DisplayRole) const;
 
@@ -88,28 +93,30 @@ public:
 	bool isEmpty() const { return m_annotations.isEmpty(); }
 
 	void addAnnotation(const Annotation &annotation);
-	void addAnnotation(int id, const QRect &rect);
-	void deleteAnnotation(int id);
-	void reshapeAnnotation(int id, const QRect &newrect);
-	void changeAnnotation(int id, const QString &newtext, bool protect, int valign, const QColor &bgcolor);
+	void addAnnotation(uint16_t id, const QRect &rect);
+	void deleteAnnotation(uint16_t id);
+	void reshapeAnnotation(uint16_t id, const QRect &newrect);
+	void changeAnnotation(uint16_t id, const QString &newtext, bool protect, int valign, const QColor &bgcolor);
 
 	void setAnnotations(const QList<Annotation> &list);
 	QList<Annotation> getAnnotations() const { return m_annotations; }
 
 	const Annotation *annotationAtPos(const QPoint &pos, qreal zoom) const;
 
-	Annotation::Handle annotationHandleAt(int id, const QPoint &point, qreal zoom) const;
-	Annotation::Handle annotationAdjustGeometry(int id, Annotation::Handle handle, const QPoint &delta);
+	Annotation::Handle annotationHandleAt(uint16_t id, const QPoint &point, qreal zoom) const;
+	Annotation::Handle annotationAdjustGeometry(uint16_t id, Annotation::Handle handle, const QPoint &delta);
 
-	const Annotation *getById(int id) const;
+	const Annotation *getById(uint16_t id) const;
 
 	//! Return the IDs of annotations that have no text content
-	QList<int> getEmptyIds() const;
+	QList<uint16_t> getEmptyIds() const;
 
 	void clear();
 
 private:
-	int findById(int id) const;
+	AnnotationModel(const AnnotationModel *orig, QObject *newParent);
+
+	int findById(uint16_t id) const;
 
 	QList<Annotation> m_annotations;
 };

@@ -34,6 +34,7 @@ private slots:
 		const QString bannedUser = "troll user with a long \\ \"name}%[";
 		const QString opUser = "op";
 		const QHostAddress bannedAddress("::ffff:192.168.0.100");
+		const QString bannedExtAuthId = "trololo";
 
 		const QString announcementUrl = "http://example.com/";
 
@@ -41,14 +42,15 @@ private slots:
 		{
 			std::unique_ptr<FiledHistory> fh { FiledHistory::startNew(m_dir, testId, idAlias, protover, founder) };
 			QVERIFY(fh.get());
-			fh->setPassword(password);
-			fh->setOpword(opword);
+			fh->setPasswordHash(passwordhash::hash(password));
+			fh->setOpwordHash(passwordhash::hash(opword));
 			fh->setMaxUsers(200);
 			fh->setMaxUsers(maxUsers); // this should replace the previously set value
 			fh->setTitle(title);
 			fh->setFlags(flags);
-			fh->addBan(bannedUser, bannedAddress, opUser);
-			fh->addBan("test", QHostAddress("192.168.0.101"), opUser);
+			fh->addBan(bannedUser, bannedAddress, QString(), opUser);
+			fh->addBan("test", QHostAddress("192.168.0.101"), QString(), opUser);
+			fh->addBan("test3", QHostAddress("192.168.0.102"), bannedExtAuthId, opUser);
 			fh->removeBan(2);
 			fh->addAnnouncement(announcementUrl);
 			fh->addAnnouncement("http://example.com/2/");
@@ -58,6 +60,9 @@ private slots:
 			fh->setAuthenticatedOperator("u1", true);
 			fh->setAuthenticatedOperator("u2", true);
 			fh->setAuthenticatedOperator("u1", false);
+
+			// The history file must have some content before it can be loaded
+			fh->addMessage(protocol::MessagePtr(new protocol::Chat(1, 0, 0, QByteArray("test"))));
 		}
 
 		{
@@ -75,10 +80,15 @@ private slots:
 			QCOMPARE(fh->flags(), flags);
 
 			QJsonArray banlist = fh->banlist().toJson(true);
-			QCOMPARE(banlist.size(), 1);
+			QCOMPARE(banlist.size(), 2);
 			QCOMPARE(banlist.at(0).toObject()["username"].toString(), bannedUser);
 			QCOMPARE(banlist.at(0).toObject()["bannedBy"].toString(), opUser);
 			QCOMPARE(banlist.at(0).toObject()["ip"].toString(), bannedAddress.toString());
+			QCOMPARE(banlist.at(0).toObject()["extauthid"].toString(), QString());
+
+			QCOMPARE(banlist.at(1).toObject()["username"].toString(), QString("test3"));
+			QCOMPARE(banlist.at(1).toObject()["extauthid"].toString(), bannedExtAuthId);
+			QCOMPARE(banlist.at(1).toObject()["bannedBy"].toString(), opUser);
 
 			QStringList announcements = fh->announcements();
 			QCOMPARE(announcements.size(), 1);

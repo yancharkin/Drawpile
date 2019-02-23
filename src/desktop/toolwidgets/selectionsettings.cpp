@@ -20,7 +20,7 @@
 #include "selectionsettings.h"
 #include "canvas/selection.h"
 #include "canvas/canvasmodel.h"
-#include "canvas/statetracker.h"
+#include "canvas/aclfilter.h"
 #include "net/client.h"
 #include "scene/canvasview.h"
 #include "tools/toolcontroller.h"
@@ -31,8 +31,8 @@
 
 namespace tools {
 
-SelectionSettings::SelectionSettings(const QString &name, const QString &title, bool freeform, ToolController *ctrl)
-	: QObject(), ToolSettings(name, title, freeform ? "edit-select-lasso" : "select-rectangular", ctrl), m_ui(nullptr), m_freeform(freeform)
+SelectionSettings::SelectionSettings(ToolController *ctrl, QObject *parent)
+	: ToolSettings(ctrl, parent), m_ui(nullptr)
 {
 }
 
@@ -41,13 +41,6 @@ SelectionSettings::~SelectionSettings()
 	delete m_ui;
 }
 
-tools::Tool::Type SelectionSettings::toolType() const
-{
-	if(m_freeform)
-		return tools::Tool::POLYGONSELECTION;
-	else
-		return tools::Tool::SELECTION;
-}
 
 QWidget *SelectionSettings::createUiWidget(QWidget *parent)
 {
@@ -127,7 +120,7 @@ void SelectionSettings::cutSelection()
 	canvas::Selection *sel = controller()->model()->selection();
 	const int layer = controller()->activeLayer();
 
-	if(sel && sel->pasteImage().isNull() && !controller()->model()->stateTracker()->isLayerLocked(layer)) {
+	if(sel && sel->pasteImage().isNull() && !controller()->model()->aclFilter()->isLayerLocked(layer)) {
 		static_cast<tools::SelectionTool*>(controller()->getTool(Tool::SELECTION))->startMove();
 	}
 }

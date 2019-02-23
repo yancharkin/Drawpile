@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2008-2015 Calle Laakkonen
+   Copyright (C) 2008-2019 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -19,6 +19,9 @@
 #ifndef LAYERSTACK_H
 #define LAYERSTACK_H
 
+#include "annotationmodel.h"
+#include "tile.h"
+
 #include <cstdint>
 
 #include <QObject>
@@ -28,11 +31,11 @@
 
 class QDataStream;
 
-#include "annotationmodel.h"
-
 namespace paintcore {
 
 class Layer;
+class EditableLayer;
+class EditableLayerStack;
 class Tile;
 class Savepoint;
 struct LayerInfo;
@@ -43,6 +46,7 @@ struct LayerInfo;
 class LayerStack : public QObject {
 	Q_PROPERTY(AnnotationModel* annotations READ annotations CONSTANT)
 	Q_OBJECT
+	friend class EditableLayerStack;
 public:
 	enum ViewMode {
 		NORMAL,   // show all layers normally
@@ -50,37 +54,22 @@ public:
 		ONIONSKIN // show view layer + few layers below it with decreasing opacity
 	};
 
-	LayerStack(QObject *parent=0);
+	LayerStack(QObject *parent=nullptr);
 	~LayerStack();
 
-	//! Adjust layer stack size
-	void resize(int top, int right, int bottom, int left);
+	//! Return a copy of this LayerStack
+	LayerStack *clone(QObject *newParent=nullptr) const { return new LayerStack(this, newParent); }
 
-	//! Create a new layer
-	Layer *createLayer(int id, int source, const QColor &color, bool insert, bool copy, const QString &name);
-
-	//! Delete a layer
-	bool deleteLayer(int id);
-
-	//! Merge the layer to the one below it
-	void mergeLayerDown(int id);
-
-	//! Re-order the layer stack
-	void reorderLayers(const QList<uint16_t> &neworder);
+	//! Get the background tile
+	Tile background() const { return m_backgroundTile; }
 
 	//! Get the number of layers in the stack
 	int layerCount() const { return m_layers.count(); }
 
-	//! Get a layer by its index
-	Layer *getLayerByIndex(int index);
-
 	//! Get a read only layer by its index
 	const Layer *getLayerByIndex(int index) const;
 
-	//! Get a layer by its ID
-	Layer *getLayer(int id);
-
-	//! Get a layer by its ID
+	//! Get a read only layer by its ID
 	const Layer *getLayer(int id) const;
 
 	//! Get this layer stack's annotations
@@ -91,25 +80,28 @@ public:
 	int indexOf(int id) const;
 
 	//! Get the width of the layer stack
-	int width() const { return _width; }
+	int width() const { return m_width; }
 
 	//! Get the height of the layer stack
-	int height() const { return _height; }
+	int height() const { return m_height; }
 
 	//! Get the width and height of the layer stack
-	QSize size() const { return QSize(_width, _height); }
+	QSize size() const { return QSize(m_width, m_height); }
 
 	//! Paint all changed tiles in the given area
 	void paintChangedTiles(const QRect& rect, QPaintDevice *target, bool clean=true);
+
+	//! Return the topmost visible layer with a color at the point
+	const Layer *layerAt(int x, int y) const;
 
 	//! Get the merged color value at the point
 	QColor colorAt(int x, int y, int dia=0) const;
 
 	//! Return a flattened image of the layer stack
-	QImage toFlatImage(bool includeAnnotations) const;
+	QImage toFlatImage(bool includeAnnotations, bool includeBackground) const;
 
-	//! Return a single layer composited with the given background
-	QImage flatLayerImage(int layerIdx, bool useBgLayer, const QColor &background);
+	//! Return a single layer merged with the background
+	QImage flatLayerImage(int layerIdxr) const;
 
 	//! Get a merged tile
 	Tile getFlatTile(int x, int y) const;
@@ -117,7 +109,7 @@ public:
 	//! Mark the tiles under the area dirty
 	void markDirty(const QRect &area);
 
-	//! Mark all tiles as dirty and call notifyAreaChanged
+	//! Mark all tiles as dirty
 	void markDirty();
 
 	//! Mark the tile at the given index as dirty
@@ -126,37 +118,24 @@ public:
 	//! Mark the tile at the given index as dirty
 	void markDirty(int index);
 
-	//! Emit areaChanged if anything has been marked as dirty
-	void notifyAreaChanged();
-
-	//! Emit a layer info change notification
-	void notifyLayerInfoChange(const Layer *layer);
-
 	//! Create a new savepoint
 	Savepoint *makeSavepoint();
 
-	//! Restore layer stack to a previous savepoint
-	void restoreSavepoint(const Savepoint *savepoint);
+	//! Get the current view rendering mode
+	ViewMode viewMode() const { return m_viewmode; }
 
-	//! Set layer view mode
-	void setViewMode(ViewMode mode);
+	//! Are layers tagged for censoring actually censored?
+	bool isCensored() const { return m_censorLayers; }
 
-	ViewMode viewMode() const { return _viewmode; }
+	/**
+	 * @brief Find a layer with a sublayer with the given ID and return its change bounds
+	 * @param contextid
+	 * @return Layer ID, Change bounds pair
+	 */
+	QPair<int,QRect> findChangeBounds(int contextid);
 
-	//! Set the selected layer (used by view modes other than NORMAL)
-	void setViewLayer(int id);
-
-	//! Set onionskin view mode parameters
-	void setOnionskinMode(int below, int above, bool tint);
-
-	//! Show background layer (bottom-most layer) in special view modes
-	void setViewBackgroundLayer(bool usebg);
-
-	//! Clear the entire layer stack
-	void reset();
-
-	//! Remove all preview layers (ephemeral sublayers)
-	void removePreviews();
+	//! Start a layer stack editing sequence
+	inline EditableLayerStack editor();
 
 signals:
 	//! Emitted when the visible layers are edited
@@ -165,57 +144,141 @@ signals:
 	//! Layer width/height changed
 	void resized(int xoffset, int yoffset, const QSize &oldsize);
 
-	//! A layer's info has just changed
-	void layerChanged(int idx);
-
-	//! A layer was just added
-	void layerCreated(int idx, const LayerInfo &info);
-
-	//! A layer was just deleted
-	void layerDeleted(int idx);
-
-	//! All (or at least a lot of) layers have just changed
-	void layersChanged(const QList<LayerInfo> &layers);
-
 private:
+	LayerStack(const LayerStack *orig, QObject *parent);
+
+	// Emission of areaChanged is suppressed during an active write sequence
+	void beginWriteSequence();
+	void endWriteSequence();
+
 	void flattenTile(quint32 *data, int xindex, int yindex) const;
 
 	bool isVisible(int idx) const;
 	int layerOpacity(int idx) const;
 	quint32 layerTint(int idx) const;
 
-	QList<LayerInfo> layerInfos() const;
-
-	int _width, _height;
-	int _xtiles, _ytiles;
+	int m_width, m_height;
+	int m_xtiles, m_ytiles;
 	QList<Layer*> m_layers;
 	AnnotationModel *m_annotations;
+	Tile m_backgroundTile;
+	Tile m_paintBackgroundTile;
 
-	QBitArray _dirtytiles;
-	QRect _dirtyrect;
+	QBitArray m_dirtytiles;
+	QRect m_dirtyrect;
 
-	ViewMode _viewmode;
-	int _viewlayeridx;
-	int _onionskinsBelow, _onionskinsAbove;
-	bool _onionskinTint;
-	bool _viewBackgroundLayer;
+	ViewMode m_viewmode;
+	int m_viewlayeridx;
+	int m_onionskinsBelow, m_onionskinsAbove;
+	int m_openEditors;
+	bool m_onionskinTint;
+	bool m_censorLayers;
 };
 
 /// Layer stack savepoint for undo use
 class Savepoint {
 	friend class LayerStack;
+	friend class EditableLayerStack;
 public:
 	~Savepoint();
 
 	void toDatastream(QDataStream &out) const;
-	static Savepoint *fromDatastream(QDataStream &in, LayerStack *owner);
+	static Savepoint *fromDatastream(QDataStream &in);
 
 private:
 	Savepoint() {}
 	QList<Layer*> layers;
 	QList<Annotation> annotations;
+	Tile background;
 	int width, height;
 };
+
+/**
+ * @brief A wrapper class for editing a LayerStack
+ */
+class EditableLayerStack {
+public:
+	explicit EditableLayerStack(LayerStack *layerstack)
+		: d(layerstack)
+	{
+		Q_ASSERT(d);
+		d->beginWriteSequence();
+	}
+	EditableLayerStack(EditableLayerStack &&other)
+	{
+		d = other.d;
+		other.d = nullptr;
+	}
+
+	EditableLayerStack(const EditableLayerStack&) = delete;
+	EditableLayerStack &operator=(const EditableLayerStack&) = delete;
+
+	~EditableLayerStack()
+	{
+		if(d)
+			d->endWriteSequence();
+	}
+
+	//! Adjust layer stack size
+	void resize(int top, int right, int bottom, int left);
+
+	//! Set the background tile
+	void setBackground(const Tile &tile);
+
+	//! Create a new layer
+	EditableLayer createLayer(int id, int source, const QColor &color, bool insert, bool copy, const QString &name);
+
+	//! Delete a layer
+	bool deleteLayer(int id);
+
+	//! Merge the layer to the one below it
+	void mergeLayerDown(int id);
+
+	//! Re-order the layer stack
+	void reorderLayers(const QList<uint16_t> &neworder);
+
+	//! Get a layer by its index
+	EditableLayer getEditableLayerByIndex(int index);
+
+	//! Get a layer wrapped in EditableLayer
+	EditableLayer getEditableLayer(int id);
+
+	//! Clear the entire layer stack
+	void reset();
+
+	//! Remove all preview layers (ephemeral sublayers)
+	void removePreviews();
+
+	//! Merge all sublayers with the given ID
+	void mergeSublayers(int id);
+
+	//! Merge all sublayers with positive IDs
+	void mergeAllSublayers();
+
+	//! Set layer view mode
+	void setViewMode(LayerStack::ViewMode mode);
+
+	//! Set the selected layer (used by view modes other than NORMAL)
+	void setViewLayer(int id);
+
+	//! Set onionskin view mode parameters
+	void setOnionskinMode(int below, int above, bool tint);
+
+	//! Enable/disable censoring of layers
+	void setCensorship(bool censor);
+
+	//! Restore layer stack to a previous savepoint
+	void restoreSavepoint(const Savepoint *savepoint);
+
+	const LayerStack *layerStack() const { return d; }
+
+	const LayerStack *operator ->() const { return d; }
+
+private:
+	LayerStack *d;
+};
+
+EditableLayerStack LayerStack::editor() { return EditableLayerStack(this); }
 
 }
 

@@ -27,8 +27,6 @@
 #include "filedhistory.h"
 #include "templateloader.h"
 
-#include "../util/announcementapi.h"
-
 #include <QTimer>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -156,8 +154,8 @@ void SessionServer::initSession(Session *session)
 
 	connect(session, &Session::userConnected, this, &SessionServer::moveFromLobby);
 	connect(session, &Session::userDisconnected, this, &SessionServer::userDisconnectedEvent);
-	connect(session, &Session::sessionAttributeChanged, [this](Session *ses) { emit sessionChanged(ses->getDescription()); });
-	connect(session, &Session::destroyed, [this, session]() {
+	connect(session, &Session::sessionAttributeChanged, this, [this](Session *ses) { emit sessionChanged(ses->getDescription()); });
+	connect(session, &Session::destroyed, this, [this, session]() {
 		m_sessions.removeOne(session);
 		emit sessionEnded(session->idString());
 	});
@@ -216,11 +214,8 @@ void SessionServer::stopAll()
 	for(Client *c : m_lobby)
 		c->disconnectShutdown();
 
-	auto sessions = m_sessions;
-	sessions.detach();
-	for(Session *s : sessions) {
+	for(Session *s : m_sessions)
 		s->killSession(false);
-	}
 }
 
 void SessionServer::messageAll(const QString &message, bool alert)
@@ -307,17 +302,13 @@ void SessionServer::userDisconnectedEvent(Session *session)
 
 void SessionServer::cleanupSessions()
 {
-	const int expirationTime = m_config->getConfigTime(config::IdleTimeLimit);
+	const qint64 expirationTime = m_config->getConfigTime(config::IdleTimeLimit) * 1000;
 
 	if(expirationTime>0) {
-		QDateTime now = QDateTime::currentDateTime();
-
 		for(Session *s : m_sessions) {
-			if(s->userCount()==0) {
-				if(s->lastEventTime().msecsTo(now) > expirationTime) {
-					s->log(Log().about(Log::Level::Info, Log::Topic::Status).message("Idle session expired."));
-					s->killSession();
-				}
+			if(s->lastEventTime() > expirationTime) {
+				s->log(Log().about(Log::Level::Info, Log::Topic::Status).message("Idle session expired."));
+				s->killSession();
 			}
 		}
 	}
@@ -339,6 +330,18 @@ JsonApiResult SessionServer::callSessionJsonApi(JsonApiMethod method, const QStr
 
 	if(method == JsonApiMethod::Get) {
 		return {JsonApiResult::Ok, QJsonDocument(sessionDescriptions())};
+
+	} else if(method == JsonApiMethod::Update) {
+		const QString msg = request["message"].toString();
+		if(!msg.isEmpty())
+			messageAll(msg, false);
+
+		const QString alert = request["alert"].toString();
+		if(!alert.isEmpty())
+			messageAll(alert, true);
+
+		return {JsonApiResult::Ok, QJsonDocument(QJsonObject())};
+
 
 	} else {
 		return JsonApiBadMethod();

@@ -1,9 +1,8 @@
 # src/server/CMakeLists.txt
 
-find_package( Qt5Network REQUIRED)
 find_package( Qt5Sql REQUIRED)
 find_package( Libmicrohttpd )
-find_package( KF5Archive REQUIRED NO_MODULE )
+find_package(Sodium)
 
 set (
 	SOURCES
@@ -22,7 +21,7 @@ if(SERVERGUI)
 	qt5_wrap_ui( UI_Headers gui/ipbandialog.ui gui/accountdialog.ui gui/settings.ui gui/authdialog.ui )
 	qt5_add_resources( QtResource gui/res/resources.qrc )
 
-	set(SOURCES ${SOURCES} ${UI_Headers} ${QtResource}
+	set(SOURCES ${SOURCES} ${UI_Headers}
 		gui/gui.cpp
 		gui/singleinstance.cpp
 		gui/trayicon.cpp
@@ -40,6 +39,7 @@ if(SERVERGUI)
 		gui/accountlistpage.cpp
 		gui/sessionpage.cpp
 		gui/subheaderwidget.cpp
+		gui/jsonlistmodel.cpp
 		gui/userlistmodel.cpp
 		gui/sessionlistmodel.cpp
 		gui/banlistmodel.cpp
@@ -75,18 +75,23 @@ else( MHD_FOUND )
 	message(WARNING "Libmicrohttpd not found: web-admin not enabled" )
 endif( MHD_FOUND )
 
+# Enable ext-auth if libsodium is available
+if( Sodium_FOUND )
+    add_definitions(-DHAVE_LIBSODIUM)
+endif( Sodium_FOUND )
 
-add_library( "${SRVNAME}lib" ${SOURCES} )
+
+add_library( "${SRVNAME}lib" STATIC ${SOURCES} )
 target_link_libraries( "${SRVNAME}lib"  ${DPSHAREDLIB} Qt5::Network Qt5::Sql ${INITSYS_LIB} ${MHD_LIBRARIES} )
 if(SERVERGUI)
 	target_link_libraries( "${SRVNAME}lib"  Qt5::Widgets )
 endif()
 
-add_executable(${SRVNAME} main.cpp)
+add_executable(${SRVNAME} main.cpp ${QtResource})
 target_link_libraries(${SRVNAME} "${SRVNAME}lib")
 
 if ( UNIX AND NOT APPLE )
-	install ( TARGETS ${SRVNAME} DESTINATION bin )
+	install ( TARGETS ${SRVNAME} DESTINATION ${INSTALL_TARGETS_DEFAULT_ARGS} )
 endif ()
 
 if(TESTS)

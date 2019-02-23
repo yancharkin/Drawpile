@@ -27,11 +27,11 @@ class LaserPointer : public Tool {
 public:
 	LaserPointer(ToolController &owner);
 
-	void begin(const paintcore::Point& point, float zoom);
-	void motion(const paintcore::Point& point, bool constrain, bool center);
-	void end();
+	void begin(const paintcore::Point& point, bool right, float zoom) override;
+	void motion(const paintcore::Point& point, bool constrain, bool center) override;
+	void end() override;
 
-	bool allowSmoothing() const { return true; }
+	bool allowSmoothing() const override { return true; }
 
 	void setPersistence(int p) { m_persistence = p; }
 

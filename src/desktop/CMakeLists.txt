@@ -1,10 +1,8 @@
-#find_package(Qt5Core REQUIRED)
-#find_package(Qt5Network REQUIRED)
 find_package(Qt5Widgets REQUIRED)
-#find_package(Qt5Concurrent REQUIRED)
 find_package(Qt5Multimedia REQUIRED)
 find_package(Qt5Svg REQUIRED)
 find_package(QtColorWidgets)
+find_package(Vpx)
 
 include_directories("../client")
 
@@ -15,12 +13,12 @@ set (
 	notifications.cpp
 	toolwidgets/toolsettings.cpp
 	toolwidgets/brushsettings.cpp
-	toolwidgets/shapetoolsettings.cpp
 	toolwidgets/colorpickersettings.cpp
 	toolwidgets/selectionsettings.cpp
 	toolwidgets/annotationsettings.cpp
 	toolwidgets/fillsettings.cpp
 	toolwidgets/lasersettings.cpp
+	toolwidgets/zoomsettings.cpp
 	scene/canvasscene.cpp
 	scene/canvasview.cpp
 	scene/canvasitem.cpp
@@ -28,6 +26,7 @@ set (
 	scene/selectionitem.cpp
 	scene/usermarkeritem.cpp
 	scene/lasertrailitem.cpp
+	dialogs/abusereport.cpp
 	dialogs/certificateview.cpp
 	dialogs/newdialog.cpp 
 	dialogs/hostdialog.cpp
@@ -39,11 +38,12 @@ set (
 	dialogs/videoexportdialog.cpp
 	dialogs/recfilterdialog.cpp
 	dialogs/netstats.cpp
-	dialogs/sessionlistingdialog.cpp
 	dialogs/flipbook.cpp
 	dialogs/resetdialog.cpp
 	dialogs/sessionsettings.cpp
 	dialogs/serverlogdialog.cpp
+	dialogs/tablettester.cpp
+	dialogs/avatarimport.cpp
 	widgets/viewstatus.cpp
 	widgets/palettewidget.cpp 
 	widgets/popupmessage.cpp
@@ -55,12 +55,15 @@ set (
 	widgets/kis_curve_widget.cpp
 	widgets/keysequenceedit.cpp
 	widgets/groupedtoolbutton.cpp
-	widgets/userlistwidget.cpp 
+	widgets/useritemdelegate.cpp
 	widgets/filmstrip.cpp 
 	widgets/resizerwidget.cpp
-	widgets/presetpie.cpp
+	widgets/tablettest.cpp
+	widgets/flipbookview.cpp
+	widgets/spinner.cpp
 	docks/utils.cpp
-	docks/toolsettingsdock.cpp 
+	docks/toolsettingsdock.cpp
+	docks/brushpalettedock.cpp
 	docks/navigator.cpp 
 	docks/colorbox.cpp
 	docks/layerlistdock.cpp
@@ -77,12 +80,29 @@ IF ( APPLE )
 	set ( SOURCES ${SOURCES} widgets/macmenu.cpp )
 ENDIF ( APPLE )
 
+IF(KIS_TABLET)
+	if(WIN32)
+		set (SOURCES ${SOURCES}
+			bundled/kis_tablet/kis_tablet_support_win8.cpp
+			bundled/kis_tablet/kis_tablet_support_win.cpp
+		)
+	elseif (NOT APPLE)
+		set (SOURCES ${SOURCES}
+			bundled/kis_tablet/kis_xi2_event_filter.cpp
+			bundled/kis_tablet/qxcbconnection.cpp
+			bundled/kis_tablet/qxcbconnection_xi2.cpp
+		)
+
+		find_package(X11 REQUIRED COMPONENTS Xinput)
+		find_package(XCB REQUIRED COMPONENTS XCB)
+		find_package(Qt5X11Extras REQUIRED)
+
+		set (EXTRALIBS Qt5::X11Extras ${X11_Xinput_LIB} ${XCB_LIBRARIES} ${X11_LIBRARIES} )
+	endif()
+ENDIF(KIS_TABLET)
+
 if(GIF_FOUND)
 	add_definitions(-DHAVE_GIFLIB)
-endif()
-
-if(LIBMINIUPNPC_FOUND)
-	add_definitions(-DHAVE_UPNP)
 endif()
 
 if(LIBMINIUPNPC_FOUND)
@@ -93,23 +113,23 @@ if(KF5DNSSD_FOUND)
 	add_definitions(-DHAVE_DNSSD)
 endif()
 
+if(LIBVPX_FOUND)
+	add_definitions(-DHAVE_WEBM)
+endif()
+
 set (
 	UIs
-	ui/brushsettings.ui
-	ui/simplesettings.ui
-	ui/smudgesettings.ui
+	ui/brushdock.ui
+	ui/brushpalette.ui
 	ui/certificateview.ui
 	ui/hostdialog.ui
 	ui/joindialog.ui
 	ui/settings.ui
 	ui/textsettings.ui
-	ui/pensettings.ui
-	ui/erasersettings.ui
 	ui/selectsettings.ui
 	ui/fillsettings.ui
 	ui/lasersettings.ui
 	ui/layerbox.ui
-	ui/userbox.ui
 	ui/newdialog.ui
 	ui/resizedialog.ui
 	ui/videoexport.ui
@@ -118,12 +138,15 @@ set (
 	ui/logindialog.ui
 	ui/colorbox.ui
 	ui/netstats.ui
-	ui/sessionlisting.ui
 	ui/flipbook.ui
 	ui/playback.ui
 	ui/resetsession.ui
 	ui/sessionsettings.ui
 	ui/serverlog.ui
+	ui/tablettest.ui
+	ui/abusereport.ui
+	ui/avatarimport.ui
+	ui/navigator.ui
 )
 
 # Use bundled QtColorWidgets widgets if library not found
@@ -140,6 +163,7 @@ else()
 		bundled/QtColorWidgets/hue_slider.cpp
 		bundled/QtColorWidgets/color_line_edit.cpp
 		bundled/QtColorWidgets/color_utils.cpp
+		bundled/QtColorWidgets/color_names.cpp
 	)
 	qt5_add_resources( QtResource bundled/QtColorWidgets/color_widgets.qrc )
 	include_directories("${CMAKE_CURRENT_SOURCE_DIR}/bundled/QtColorWidgets")
@@ -208,7 +232,7 @@ add_executable (
 	${UI_Headers} # required here for ui_*.h generation
 )
 
-target_link_libraries(${CLIENTNAME} ${DPCLIENTLIB} ${DPSHAREDLIB} Qt5::Widgets Qt5::Multimedia Qt5::Svg)
+target_link_libraries(${CLIENTNAME} ${DPCLIENTLIB} Qt5::Widgets Qt5::Multimedia Qt5::Svg ${EXTRALIBS})
 
 if(QTCOLORWIDGETS_FOUND)
 	target_link_libraries(${CLIENTNAME} ${LIBQTCOLORWIDGETS_LIBRARIES})
@@ -221,13 +245,9 @@ set_target_properties (
 	PROJECT_LABEL drawpile-client
 )
 
-install ( TARGETS ${CLIENTNAME} DESTINATION bin )
+install ( TARGETS ${CLIENTNAME} DESTINATION ${INSTALL_TARGETS_DEFAULT_ARGS} )
 
 if (NOT CMAKE_BUILD_TYPE STREQUAL Debug)
-	if (APPLE)
-		strip_exe ( ${CLIENTNAME}.app/Contents/MacOS/${CLIENTNAME} )
-	else ()
-		strip_exe ( ${CLIENTNAME} )
-	endif()
+	strip_exe ( ${CLIENTNAME} )
 endif ( )
 

@@ -31,19 +31,21 @@ namespace {
 
 class Floodfill {
 public:
-	Floodfill(const LayerStack *image, int sourceLayer, bool merge, const QColor &color, int colorTolerance) :
+	Floodfill(const LayerStack *image, int sourceLayer, bool merge, const QColor &color, int colorTolerance, unsigned int sizelimit) :
 		source(image),
-		scratch(0, 0, QString(), Qt::transparent, image->size()),
-		fill(0, 0, QString(), Qt::transparent, image->size()),
+		scratch(0, QString(), Qt::transparent, image->size()),
+		fill(0, QString(), Qt::transparent, image->size()),
 		layer(sourceLayer),
 		merge(merge),
 		fillColor(color.rgba()),
-		tolerance(colorTolerance)
+		tolerance(colorTolerance),
+		filledSize(0),
+		sizelimit(sizelimit)
 	{ }
 
 	Tile &scratchTile(int x, int y)
 	{
-		Tile &t = scratch.rtile(x, y);
+		Tile &t = EditableLayer(&scratch, nullptr).rtile(x, y);
 		if(t.isNull()) {
 			if(merge) {
 				t = source->getFlatTile(x, y);
@@ -62,7 +64,7 @@ public:
 	}
 
 	Tile &fillTile(int x, int y) {
-		Tile &t = fill.rtile(x, y);
+		Tile &t = EditableLayer(&fill, nullptr).rtile(x, y);
 		if(t.isNull())
 			t = Tile(Qt::transparent);
 
@@ -78,7 +80,7 @@ public:
 
 		const Tile &t = scratchTile(tx, ty);
 
-		return t.data()[y*Tile::SIZE + x];
+		return t.constData()[y*Tile::SIZE + x];
 	}
 
 	void setPixel(int x, int y) {
@@ -108,8 +110,21 @@ public:
 	void start(const QPoint &startPoint)
 	{
 		oldColor = colorAt(startPoint.x(), startPoint.y());
-		if(isSameColor(oldColor, fillColor))
-			return;
+		if(qAlpha(fillColor) == 0) {
+			// Transparent fill: assign fill color to some other color
+			// than the starting point, unless it's transparent
+			if(qAlpha(oldColor) == 0)
+				return;
+
+			if(qRed(oldColor) == 0)
+				fillColor = QColor(Qt::white).rgba();
+			else
+				fillColor = QColor(Qt::black).rgba();
+
+		} else {
+			if(isSameColor(oldColor, fillColor))
+				return;
+		}
 
 		// Get the original layer seed color (even in merged mode)
 		{
@@ -129,7 +144,7 @@ public:
 
 		const int w1 = scratch.width()-1;
 
-		while(!stack.isEmpty()) {
+		while(!stack.isEmpty() && filledSize < sizelimit) {
 			QPoint p = stack.pop();
 
 			const int x = p.x();
@@ -143,6 +158,7 @@ public:
 
 			while(y < scratch.height() && isOldColorAt(x, y)) {
 				setPixel(x, y);
+				++filledSize;
 
 				if(!spanLeft && x>0 && isOldColorAt(x-1, y)) {
 					stack.push(QPoint(x-1, y));
@@ -168,6 +184,7 @@ public:
 		FillResult res;
 		res.image = fill.toCroppedImage(&res.x, &res.y);
 		res.layerSeedColor = layerSeedColor;
+		res.oversize = filledSize >= sizelimit;
 		return res;
 	}
 
@@ -197,6 +214,10 @@ private:
 
 	// Color matching tolerance
 	int tolerance;
+
+	// Maximum number of pixels to fill
+	unsigned int filledSize;
+	unsigned int sizelimit;
 };
 
 /**
@@ -236,12 +257,15 @@ QRect findOpaqueBoundingRect(const QImage &image)
 
 }
 
-FillResult floodfill(const LayerStack *image, const QPoint &point, const QColor &color, int tolerance, int layer, bool merge)
+FillResult floodfill(const LayerStack *image, const QPoint &point, const QColor &color, int tolerance, int layer, bool merge, unsigned int sizelimit)
 {
 	Q_ASSERT(image);
 	Q_ASSERT(tolerance>=0);
 
-	Floodfill fill(image, layer, merge, color, tolerance);
+	if(!image->getLayer(layer))
+		return FillResult();
+
+	Floodfill fill(image, layer, merge, color, tolerance, sizelimit);
 
 	if(point.x() >=0 && point.x() < image->width() && point.y()>=0 && point.y() < image->height())
 		fill.start(point);
@@ -254,7 +278,7 @@ FillResult expandFill(const FillResult &input, int expansion, const QColor &colo
 	if(input.image.isNull() || expansion<1)
 		return input;
 
-	Q_ASSERT(input.image.format() == QImage::Format_ARGB32);
+	Q_ASSERT(input.image.format() == QImage::Format_ARGB32_Premultiplied);
 
 	FillResult out;
 

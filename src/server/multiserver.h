@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2013-2017 Calle Laakkonen
+   Copyright (C) 2013-2018 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -22,7 +22,7 @@
 
 #include <QObject>
 #include <QHostAddress>
-
+#include <QDateTime>
 #include "../shared/server/jsonapi.h"
 
 class QTcpServer;
@@ -46,12 +46,9 @@ public:
 	void setSslCertFile(const QString &certfile, const QString &keyfile) { m_sslCertFile = certfile; m_sslKeyFile = keyfile; }
 	void setMustSecure(bool secure);
 	void setAutoStop(bool autostop);
-	void setAnnounceLocalAddr(const QString &addr) { m_localAddress = addr; }
 	void setRecordingPath(const QString &path);
 	void setSessionDirectory(const QDir &dir);
 	void setTemplateDirectory(const QDir &dir);
-
-	QString announceLocalAddr() const { return m_localAddress; }
 
 #ifndef NDEBUG
 	void setRandomLag(uint lag);
@@ -69,6 +66,8 @@ public:
 	bool startFd(int fd);
 
 	SessionServer *sessionServer() { return m_sessions; }
+
+	ServerConfig *config() { return m_config; }
 
 public slots:
 	//! Start the server on the given port and listening address
@@ -111,6 +110,7 @@ private:
 	bool createServer();
 
 	JsonApiResult serverJsonApi(JsonApiMethod method, const QStringList &path, const QJsonObject &request);
+	JsonApiResult statusJsonApi(JsonApiMethod method, const QStringList &path, const QJsonObject &request);
 	JsonApiResult banlistJsonApi(JsonApiMethod method, const QStringList &path, const QJsonObject &request);
 	JsonApiResult accountsJsonApi(JsonApiMethod method, const QStringList &path, const QJsonObject &request);
 	JsonApiResult logJsonApi(JsonApiMethod method, const QStringList &path, const QJsonObject &request);
@@ -129,7 +129,8 @@ private:
 	QString m_sslCertFile;
 	QString m_sslKeyFile;
 	QString m_recordingPath;
-	QString m_localAddress;
+
+	QDateTime m_started;
 };
 
 }

@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2013-2017 Calle Laakkonen
+   Copyright (C) 2013-2018 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -48,6 +48,11 @@ void printVersion()
 	printf("Protocol version: %d.%d\n", DRAWPILE_PROTO_MAJOR_VERSION, DRAWPILE_PROTO_MINOR_VERSION);
 	printf("Qt version: %s (compiled against %s)\n", qVersion(), QT_VERSION_STR);
 	printf("SSL library version: %s (%lu)\n", QSslSocket::sslLibraryVersionString().toLocal8Bit().constData(), QSslSocket::sslLibraryVersionNumber());
+#ifdef HAVE_WEBADMIN
+	printf("Libmicrohttpd version: %s\n", qPrintable(Webadmin::version()));
+#else
+	printf("Libmicrohttpd version: N/A\n");
+#endif
 }
 
 bool start() {
@@ -75,9 +80,13 @@ bool start() {
 	QCommandLineOption listenOption(QStringList() << "listen" << "l", "Listening address", "address");
 	parser.addOption(listenOption);
 
-	// --local-addr
-	QCommandLineOption localAddr("local-addr", "Local address for session announcement", "address");
+	// --local-host
+	QCommandLineOption localAddr("local-host", "This server's hostname for session announcement", "hostname");
 	parser.addOption(localAddr);
+
+	// --announce-port <port>
+	QCommandLineOption announcePortOption(QStringList() << "announce-port", "Port number to announce (set if forwarding from different port)", "port");
+	parser.addOption(announcePortOption);
 
 	// --ssl-cert <certificate file>
 	QCommandLineOption sslCertOption("ssl-cert", "SSL certificate file", "certificate");
@@ -130,6 +139,15 @@ bool start() {
 	QCommandLineOption templatesOption(QStringList() << "templates" << "t", "Session templates", "path");
 	parser.addOption(templatesOption);
 
+	// --extauth <url>
+#ifdef HAVE_LIBSODIUM
+	QCommandLineOption extAuthOption(QStringList() << "extauth", "Extauth server URL", "url");
+	parser.addOption(extAuthOption);
+#endif
+
+	// --report-url <url>
+	QCommandLineOption reportUrlOption(QStringList() << "report-url", "Abuse report handler URL", "url");
+	parser.addOption(reportUrlOption);
 
 	// Parse
 	parser.process(*QCoreApplication::instance());
@@ -163,6 +181,25 @@ bool start() {
 		serverconfig = new InMemoryConfig;
 	}
 
+	// Set internal server config
+	InternalConfig icfg;
+	icfg.localHostname = parser.value(localAddr);
+#ifdef HAVE_LIBSODIUM
+	icfg.extAuthUrl = parser.value(extAuthOption);
+#endif
+	icfg.reportUrl = parser.value(reportUrlOption);
+
+	if(parser.isSet(announcePortOption)) {
+		bool ok;
+		icfg.announcePort = parser.value(announcePortOption).toInt(&ok);
+		if(!ok || icfg.announcePort>0xffff) {
+			qCritical("Invalid port %s", qPrintable(parser.value(announcePortOption)));
+			return false;
+		}
+	}
+
+	serverconfig->setInternalConfig(icfg);
+
 	// Initialize the server
 	server::MultiServer *server = new server::MultiServer(serverconfig);
 	serverconfig->setParent(server);
@@ -188,12 +225,6 @@ bool start() {
 				return false;
 			}
 		}
-	}
-
-	{
-		QString localAddress = parser.value(localAddr);
-		if(!localAddress.isEmpty())
-			server->setAnnounceLocalAddr(localAddress);
 	}
 
 	{
@@ -257,7 +288,11 @@ bool start() {
 				return false;
 			}
 		}
+#ifdef Q_OS_UNIX
+	server->connect(UnixSignals::instance(), SIGNAL(sigUsr1()), webadmin, SLOT(restart()));
+#endif
 	}
+
 #endif
 
 	// Catch signals
@@ -275,15 +310,15 @@ bool start() {
 				return false;
 
 #ifdef HAVE_WEBADMIN
-		if(webadminPort>0) {
-			webadmin->setSessions(server);
-			webadmin->start(webadminPort);
-		}
+			if(webadminPort>0) {
+				webadmin->setSessions(server);
+				webadmin->start(webadminPort);
+			}
 #endif
 
 		} else {
 			// listening socket passed to us by the init system
-			if(listenfds.size() != 1) {
+			if(listenfds.size() > 2) {
 				qCritical("Too many file descriptors received");
 				return false;
 			}
@@ -293,10 +328,14 @@ bool start() {
 			if(!server->startFd(listenfds[0]))
 				return false;
 
-			// TODO start webadmin if two fds were passsed
+			if(listenfds.size()>1) {
 #ifdef HAVE_WEBADMIN
-			qCritical("Webadmin socket activation not implemented");
+				webadmin->setSessions(server);
+				webadmin->startFd(listenfds[1]);
+#else
+				qCritical("Web admin socket passed, but web admin support not built in!");
 #endif
+			}
 		}
 	}
 

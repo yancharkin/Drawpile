@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2015-2016 Calle Laakkonen
+   Copyright (C) 2015-2018 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -20,18 +20,21 @@
 #include "toolcontroller.h"
 
 #include "annotation.h"
-#include "brushes.h"
+#include "freehand.h"
 #include "colorpicker.h"
 #include "laser.h"
 #include "selection.h"
 #include "shapetools.h"
+#include "beziertool.h"
 #include "floodfill.h"
+#include "zoom.h"
 
 #include "core/point.h"
 #include "core/layerstack.h"
 #include "core/annotationmodel.h"
 #include "canvas/canvasmodel.h"
 #include "canvas/statetracker.h"
+#include "canvas/aclfilter.h"
 
 namespace tools {
 
@@ -39,25 +42,27 @@ ToolController::ToolController(net::Client *client, QObject *parent)
 	: QObject(parent),
 	m_toolbox{},
 	m_client(client), m_model(nullptr),
-	m_activeTool(nullptr), m_smoothing(0)
+	m_activeTool(nullptr),
+	m_prevShift(false), m_prevAlt(false),
+	m_smoothing(0)
 {
 	Q_ASSERT(client);
 
-	registerTool(new Pen(*this));
-	registerTool(new Brush(*this));
-	registerTool(new Smudge(*this));
-	registerTool(new Eraser(*this));
+	registerTool(new Freehand(*this, false));
+	registerTool(new Freehand(*this, true)); // eraser is a specialized freehand tool
 	registerTool(new ColorPicker(*this));
 	registerTool(new Line(*this));
 	registerTool(new Rectangle(*this));
 	registerTool(new Ellipse(*this));
+	registerTool(new BezierTool(*this));
 	registerTool(new FloodFill(*this));
 	registerTool(new Annotation(*this));
 	registerTool(new LaserPointer(*this));
 	registerTool(new RectangleSelection(*this));
 	registerTool(new PolygonSelection(*this));
+	registerTool(new ZoomTool(*this));
 
-	m_activeTool = m_toolbox[Tool::PEN];
+	m_activeTool = m_toolbox[Tool::FREEHAND];
 	m_activeLayer = 0;
 	m_activeAnnotation = 0;
 }
@@ -86,13 +91,14 @@ Tool *ToolController::getTool(Tool::Type type)
 void ToolController::setActiveTool(Tool::Type tool)
 {
 	if(activeTool() != tool) {
+		m_activeTool->cancelMultipart();
 		m_activeTool = getTool(tool);
 		emit activeToolChanged(tool);
 		emit toolCursorChanged(activeToolCursor());
 	}
 }
 
-void ToolController::setActiveAnnotation(int id)
+void ToolController::setActiveAnnotation(uint16_t id)
 {
 	if(m_activeAnnotation != id) {
 		m_activeAnnotation = id;
@@ -112,18 +118,20 @@ QCursor ToolController::activeToolCursor() const
 	return m_activeTool->cursor();
 }
 
-void ToolController::setActiveLayer(int id)
+void ToolController::setActiveLayer(uint16_t id)
 {
 	if(m_activeLayer != id) {
 		m_activeLayer = id;
-		if(m_model)
-			m_model->layerStack()->setViewLayer(id);
+		if(m_model) {
+			auto layers = m_model->layerStack()->editor();
+			layers.setViewLayer(id);
+		}
 
 		emit activeLayerChanged(id);
 	}
 }
 
-void ToolController::setActiveBrush(const paintcore::Brush &b)
+void ToolController::setActiveBrush(const brushes::ClassicBrush &b)
 {
 	m_activebrush = b;
 	emit activeBrushChanged(b);
@@ -136,6 +144,7 @@ void ToolController::setModel(canvas::CanvasModel *model)
 
 		connect(m_model->stateTracker(), &canvas::StateTracker::myAnnotationCreated, this, &ToolController::setActiveAnnotation);
 		connect(m_model->layerStack()->annotations(), &paintcore::AnnotationModel::rowsAboutToBeRemoved, this, &ToolController::onAnnotationRowDelete);
+		connect(m_model->aclFilter(), &canvas::AclFilter::featureAccessChanged, this, &ToolController::onFeatureAccessChange);
 
 		emit modelChanged(model);
 	}
@@ -150,6 +159,14 @@ void ToolController::onAnnotationRowDelete(const QModelIndex&, int first, int la
 	}
 }
 
+void ToolController::onFeatureAccessChange(canvas::Feature feature, bool canUse)
+{
+	if(feature == canvas::Feature::RegionMove) {
+		static_cast<SelectionTool*>(getTool(Tool::SELECTION))->setTransformEnabled(canUse);
+		static_cast<SelectionTool*>(getTool(Tool::POLYGONSELECTION))->setTransformEnabled(canUse);
+	}
+}
+
 void ToolController::setSmoothing(int smoothing)
 {
 	if(m_smoothing != smoothing) {
@@ -160,7 +177,7 @@ void ToolController::setSmoothing(int smoothing)
 	}
 }
 
-void ToolController::startDrawing(const QPointF &point, qreal pressure)
+void ToolController::startDrawing(const QPointF &point, qreal pressure, bool right, float zoom)
 {
 	Q_ASSERT(m_activeTool);
 
@@ -174,7 +191,13 @@ void ToolController::startDrawing(const QPointF &point, qreal pressure)
 		m_smoother.addPoint(paintcore::Point(point, pressure));
 	}
 	// TODO handle hasSmoothPoint() == false
-	m_activeTool->begin(paintcore::Point(point, pressure), /*_zoom (TODO)*/ 1.0);
+	m_activeTool->begin(paintcore::Point(point, pressure), right, zoom);
+
+	if(!m_activeTool->isMultipart())
+		m_model->stateTracker()->setLocalDrawingInProgress(true);
+
+	if(!m_activebrush.isEraser())
+		emit colorUsed(m_activebrush.color());
 }
 
 void ToolController::continueDrawing(const QPointF &point, qreal pressure, bool shift, bool alt)
@@ -196,6 +219,18 @@ void ToolController::continueDrawing(const QPointF &point, qreal pressure, bool 
 	} else {
 		m_activeTool->motion(paintcore::Point(point, pressure), shift, alt);
 	}
+
+	m_prevShift = shift;
+	m_prevAlt = alt;
+}
+
+void ToolController::hoverDrawing(const QPointF &point)
+{
+	Q_ASSERT(m_activeTool);
+	if(!m_model)
+		return;
+
+	m_activeTool->hover(point);
 }
 
 void ToolController::endDrawing()
@@ -207,7 +242,75 @@ void ToolController::endDrawing()
 		return;
 	}
 
+	// Drain any remaining points from the smoothing buffer
+	if(m_smoothing>0 && m_activeTool->allowSmoothing()) {
+		if(m_smoother.hasSmoothPoint())
+			m_smoother.removePoint();
+		while(m_smoother.hasSmoothPoint()) {
+			m_activeTool->motion(m_smoother.smoothPoint(),
+				m_prevShift, m_prevAlt);
+			m_smoother.removePoint();
+		}
+	}
+
 	m_activeTool->end();
+	m_model->stateTracker()->setLocalDrawingInProgress(false);
+}
+
+bool ToolController::undoMultipartDrawing()
+{
+	Q_ASSERT(m_activeTool);
+
+	if(!m_model) {
+		qWarning("ToolController::undoMultipartDrawing: no model set!");
+		return false;
+	}
+
+	if(!m_activeTool->isMultipart())
+		return false;
+
+	m_activeTool->undoMultipart();
+	return true;
+}
+
+bool ToolController::isMultipartDrawing() const
+{
+	Q_ASSERT(m_activeTool);
+
+	return m_activeTool->isMultipart();
+}
+
+void ToolController::finishMultipartDrawing()
+{
+	Q_ASSERT(m_activeTool);
+
+	if(!m_model) {
+		qWarning("ToolController::finishMultipartDrawing: no model set!");
+		return;
+	}
+
+	if(m_model->aclFilter()->isLayerLocked(m_activeLayer)) {
+		// It is possible for the active layer to become locked
+		// before the user has finished multipart drawing.
+		qWarning("Cannot finish multipart drawing: active layer is locked!");
+		return;
+	}
+
+	m_smoother.reset();
+	m_activeTool->finishMultipart();
+}
+
+void ToolController::cancelMultipartDrawing()
+{
+	Q_ASSERT(m_activeTool);
+
+	if(!m_model) {
+		qWarning("ToolController::cancelMultipartDrawing: no model set!");
+		return;
+	}
+
+	m_smoother.reset();
+	m_activeTool->cancelMultipart();
 }
 
 }

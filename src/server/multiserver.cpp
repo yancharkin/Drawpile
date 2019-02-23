@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2008-2017 Calle Laakkonen
+   Copyright (C) 2008-2018 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -29,8 +29,6 @@
 #include "../shared/server/serverconfig.h"
 #include "../shared/server/serverlog.h"
 
-#include "../shared/util/announcementapi.h"
-
 #include <QTcpSocket>
 #include <QFileInfo>
 #include <QDateTime>
@@ -49,6 +47,7 @@ MultiServer::MultiServer(ServerConfig *config, QObject *parent)
 	m_port(0)
 {
 	m_sessions = new SessionServer(config, this);
+	m_started = QDateTime::currentDateTimeUtc();
 
 	connect(m_sessions, &SessionServer::sessionCreated, this, &MultiServer::assignRecording);
 	connect(m_sessions, &SessionServer::sessionEnded, this, &MultiServer::tryAutoStop);
@@ -109,8 +108,6 @@ void MultiServer::setTemplateDirectory(const QDir &dir)
 
 bool MultiServer::createServer()
 {
-	m_config->setConfigString(config::LocalAddress, m_localAddress);
-
 	if(!m_sslCertFile.isEmpty() && !m_sslKeyFile.isEmpty()) {
 		SslServer *server = new SslServer(m_sslCertFile, m_sslKeyFile, this);
 		if(!server->isValidCert()) {
@@ -154,6 +151,10 @@ bool MultiServer::start(quint16 port, const QHostAddress& address) {
 	}
 
 	m_port = m_server->serverPort();
+
+	InternalConfig icfg = m_config->internalConfig();
+	icfg.realPort = m_port;
+	m_config->setInternalConfig(icfg);
 
 	emit serverStarted();
 	m_sessions->config()->logger()->logMessage(Log().about(Log::Level::Info, Log::Topic::Status)
@@ -325,6 +326,8 @@ JsonApiResult MultiServer::callJsonApi(JsonApiMethod method, const QStringList &
 
 	if(head == "server")
 		return serverJsonApi(method, tail, request);
+	else if(head == "status")
+		return statusJsonApi(method, tail, request);
 	else if(head == "sessions")
 		return m_sessions->callSessionJsonApi(method, tail, request);
 	else if(head == "users")
@@ -364,6 +367,7 @@ JsonApiResult MultiServer::serverJsonApi(JsonApiMethod method, const QStringList
 	const ConfigKey settings[] = {
 		config::ClientTimeout,
 		config::SessionSizeLimit,
+		config::AutoresetThreshold,
 		config::SessionCountLimit,
 		config::EnablePersistence,
 		config::ArchiveMode,
@@ -373,7 +377,17 @@ JsonApiResult MultiServer::serverJsonApi(JsonApiMethod method, const QStringList
 		config::AnnounceWhiteList,
 		config::PrivateUserList,
 		config::AllowGuestHosts,
-		config::AllowGuests
+		config::AllowGuests,
+#ifdef HAVE_LIBSODIUM
+		config::UseExtAuth,
+		config::ExtAuthKey,
+		config::ExtAuthGroup,
+		config::ExtAuthFallback,
+		config::ExtAuthMod,
+		config::ExtAuthAvatars,
+#endif
+		config::LogPurgeDays,
+		config::AllowCustomAvatars
 	};
 	const int settingCount = sizeof(settings) / sizeof(settings[0]);
 
@@ -389,6 +403,33 @@ JsonApiResult MultiServer::serverJsonApi(JsonApiMethod method, const QStringList
 	for(int i=0;i<settingCount;++i) {
 		result[settings[i].name] = QJsonValue::fromVariant(m_config->getConfigVariant(settings[i]));
 	}
+
+	return JsonApiResult { JsonApiResult::Ok, QJsonDocument(result) };
+}
+
+/**
+ * @brief Read only view of server status
+ *
+ * @param method
+ * @param path
+ * @param request
+ * @return
+ */
+JsonApiResult MultiServer::statusJsonApi(JsonApiMethod method, const QStringList &path, const QJsonObject &request)
+{
+	Q_UNUSED(request);
+
+	if(!path.isEmpty())
+		return JsonApiNotFound();
+
+	if(method != JsonApiMethod::Get)
+		return JsonApiBadMethod();
+
+	QJsonObject result;
+	result["started"] = m_started.toString("yyyy-MM-dd HH:mm:ss");
+	result["sessions"] = m_sessions->sessionCount();
+	result["maxSessions"] = m_config->getConfigInt(config::SessionCountLimit);
+	result["users"] = m_sessions->totalUsers();
 
 	return JsonApiResult { JsonApiResult::Ok, QJsonDocument(result) };
 }

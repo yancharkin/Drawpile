@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2014-2017 Calle Laakkonen
+   Copyright (C) 2014-2019 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -28,6 +28,8 @@
 
 #include <KCompressionDevice>
 
+#include <memory>
+
 namespace recording {
 
 Writer::Writer(const QString &filename, QObject *parent)
@@ -51,7 +53,8 @@ Writer::Writer(const QString &filename, QObject *parent)
 
 Writer::Writer(QIODevice *file, bool autoclose, QObject *parent)
 	: QObject(parent), m_file(file),
-	m_autoclose(autoclose), m_minInterval(0), m_autoflush(nullptr), m_encoding(Encoding::Binary)
+	m_autoclose(autoclose), m_minInterval(0), m_timestampInterval(0), m_lastTimestamp(0),
+	m_autoflush(nullptr), m_encoding(Encoding::Binary)
 {
 }
 
@@ -65,6 +68,11 @@ void Writer::setMinimumInterval(int min)
 {
 	m_minInterval = min;
 	m_interval = QDateTime::currentMSecsSinceEpoch();
+}
+
+void Writer::setTimestampInterval(int interval)
+{
+	m_timestampInterval = interval;
 }
 
 void Writer::setAutoflush()
@@ -117,8 +125,9 @@ void Writer::writeFromBuffer(const QByteArray &buffer)
 		const int len = protocol::Message::sniffLength(buffer.constData());
 		Q_ASSERT(len <= buffer.length());
 		m_file->write(buffer.constData(), len);
+
 	} else {
-		protocol::Message *msg = protocol::Message::deserialize(reinterpret_cast<const uchar*>(buffer.constData()), buffer.length(), true);
+		protocol::NullableMessageRef msg = protocol::Message::deserialize(reinterpret_cast<const uchar*>(buffer.constData()), buffer.length(), true);
 		m_file->write(msg->toString().toUtf8());
 		m_file->write("\n", 1);
 	}
@@ -136,6 +145,25 @@ bool Writer::writeMessage(const protocol::Message &msg)
 			return false;
 
 	} else {
+		if(msg.type() == protocol::MSG_FILTERED) {
+			// Special case: Filtered messages are
+			// written as comments in the text format.
+			const protocol::Filtered &fm = static_cast<const protocol::Filtered&>(msg);
+			auto wrapped = fm.decodeWrapped();
+
+			QString comment;
+			if(wrapped.isNull()) {
+				comment = QStringLiteral("FILTERED: undecodable message type #%1 of length %2")
+					.arg(fm.wrappedType())
+					.arg(fm.wrappedPayloadLength());
+
+			} else {
+				comment = QStringLiteral("FILTERED: ") + wrapped->toString();
+			}
+
+			return writeComment(comment);
+		}
+
 		QByteArray line = msg.toString().toUtf8();
 		if(m_file->write(line) != line.length())
 			return false;
@@ -178,13 +206,22 @@ bool Writer::writeComment(const QString &comment)
 void Writer::recordMessage(const protocol::MessagePtr &msg)
 {
 	if(msg->isRecordable()) {
+		const qint64 now = QDateTime::currentMSecsSinceEpoch();
+
 		if(m_minInterval>0) {
-			const qint64 now = QDateTime::currentMSecsSinceEpoch();
 			const qint64 interval = now - m_interval;
 			if(interval >= m_minInterval) {
 				writeMessage(protocol::Interval(0, qMin(qint64(0xffff), interval)));
 			}
 			m_interval = now;
+		}
+
+		if(m_timestampInterval > 0) {
+			const qint64 interval = now - m_lastTimestamp;
+			if(interval >= m_timestampInterval) {
+				writeMessage(protocol::Marker(0, QDateTime::currentDateTime().toString()));
+				m_lastTimestamp = now;
+			}
 		}
 
 		writeMessage(*msg);

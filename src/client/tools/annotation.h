@@ -35,13 +35,13 @@ class Annotation : public Tool {
 public:
 	Annotation(ToolController &owner);
 
-	void begin(const paintcore::Point& point, float zoom);
-	void motion(const paintcore::Point& point, bool constrain, bool center);
-	void end();
+	void begin(const paintcore::Point& point, bool right, float zoom) override;
+	void motion(const paintcore::Point& point, bool constrain, bool center) override;
+	void end() override;
 
 private:
-	static const int PREVIEW_ID = 0x010000;
-	int m_selectedId;
+	static const uint16_t PREVIEW_ID = 0xffff;
+	uint16_t m_selectedId;
 	bool m_isNew;
 
 	QPointF m_p1, m_p2;

@@ -1,24 +1,28 @@
-cmake_minimum_required( VERSION 2.8.9 )
+cmake_minimum_required( VERSION 2.8.12 )
 
 project ( drawpile C CXX )
 
-set(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/config")
+find_package(ECM REQUIRED NOMODULE)
+
+set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/config" ${ECM_MODULE_PATH} ${ECM_KDE_MODULE_DIR})
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_AUTOMOC ON)
 
 ### generic info
-set ( WEBSITE "http://drawpile.net/" )
-set ( DRAWPILE_VERSION "2.0.0b3" )
+set ( WEBSITE "https://drawpile.net/" )
+set ( DRAWPILE_VERSION "2.1.1" )
 
 ### protocol versions
 # see doc/protocol.md for protocol version history
 set ( DRAWPILE_PROTO_SERVER_VERSION 4 )
-set ( DRAWPILE_PROTO_MAJOR_VERSION 20 )
-set ( DRAWPILE_PROTO_MINOR_VERSION 1 )
+set ( DRAWPILE_PROTO_MAJOR_VERSION 21 )
+set ( DRAWPILE_PROTO_MINOR_VERSION 2 )
 set ( DRAWPILE_PROTO_DEFAULT_PORT 27750 )
 
 ###
 include ( "config/Names.cmake" )
+
+include(KDEInstallDirs)
 
 ### options ###
 option ( CLIENT "Compile client" ON )
@@ -28,6 +32,7 @@ option ( TOOLS "Compile extra tools" OFF )
 option ( INSTALL_DOC "Install documents" ON )
 option ( INITSYS "Init system integration" "systemd" )
 option ( TESTS "Build unit tests" OFF )
+option ( KIS_TABLET "Enable customized Windows tablet support code" OFF )
 
 if (NOT CMAKE_BUILD_TYPE)
 	message(STATUS "No build type selected, default to Release")
@@ -57,6 +62,13 @@ if ( PKGCONFIG_FOUND )
 		pkg_check_modules ( SYSTEMD "libsystemd" )
 	endif ()
 endif ( PKGCONFIG_FOUND )
+
+### Cmake policies
+
+if(POLICY CMP0071)
+	# Don't run automoc and autouic on generated files (ui_*.h, qrc_*.cpp)
+	cmake_policy(SET CMP0071 OLD)
+endif()
 
 ### General compiler flags
 

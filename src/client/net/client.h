@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2013-2017 Calle Laakkonen
+   Copyright (C) 2013-2019 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -23,12 +23,12 @@
 #include "core/blendmodes.h"
 #include "net/server.h"
 #include "../shared/net/message.h"
-#include "canvas/statetracker.h" // for ToolContext
 
 #include <QObject>
-#include <QJsonArray>
-#include <QJsonObject>
 #include <QSslCertificate>
+
+class QJsonObject;
+class QJsonArray;
 
 namespace paintcore {
 	class Point;
@@ -51,7 +51,7 @@ class LoginHandler;
 class Client : public QObject {
 Q_OBJECT
 public:
-	Client(QObject *parent=0);
+	Client(QObject *parent=nullptr);
 	~Client();
 
 	/**
@@ -69,7 +69,7 @@ public:
 	 * @brief Get the local user's user/context ID
 	 * @return user ID
 	 */
-	int myId() const { return m_myId; }
+	uint8_t myId() const { return m_myId; }
 
 	/**
 	 * @brief Return the URL of the current session
@@ -106,6 +106,19 @@ public:
 	bool isLoggedIn() const { return m_server->isLoggedIn(); }
 
 	/**
+	 * @brief Is teh user logged in as an authenticated user?
+	 */
+	bool isAuthenticated() const { return m_isAuthenticated; }
+
+	/**
+	 * @brief Is this user a moderator?
+	 *
+	 * Moderator status is a feature of the user account and cannot change during
+	 * the connection.
+	 */
+	bool isModerator() const { return m_moderator; }
+
+	/**
 	 * @brief Get connection security level
 	 */
 	Server::Security securityLevel() const { return m_server->securityLevel(); }
@@ -121,6 +134,11 @@ public:
 	 * @brief Does the server support persistent sessions?
 	 */
 	bool serverSuppotsPersistence() const { return m_server->supportsPersistence(); }
+
+	/**
+	 * @brief Can the server receive abuse reports?
+	 */
+	bool serverSupportsReports() const { return m_server->supportsAbuseReports(); }
 
 	/**
 	 * @brief Get the number of bytes waiting to be sent
@@ -151,6 +169,9 @@ public slots:
 	void sendMessage(const protocol::MessagePtr &msg);
 	void sendMessages(const QList<protocol::MessagePtr> &msgs);
 
+	//! Send messages as part of a sessio reset/init
+	void sendResetMessages(const QList<protocol::MessagePtr> &msgs);
+
 signals:
 	void messageReceived(protocol::MessagePtr msg);
 	void drawingCommandLocal(protocol::MessagePtr msg);
@@ -171,13 +192,12 @@ signals:
 	void bytesReceived(int);
 	void bytesSent(int);
 	void lagMeasured(qint64);
-	void serverHistoryLimitReceived(int maxSpace);
-
-	void sentColorChange(const QColor &color);
+	void autoresetRequested(int maxSize, bool query);
+	void serverStatusUpdate(int historySize);
 
 private slots:
 	void handleMessage(const protocol::MessagePtr &msg);
-	void handleConnect(const QString &sessionId, int userid, bool join);
+	void handleConnect(const QString &sessionId, uint8_t userid, bool join, bool auth, bool moderator);
 	void handleDisconnect(const QString &message, const QString &errorcode, bool localDisconnect);
 
 private:
@@ -189,15 +209,15 @@ private:
 	LoopbackServer *m_loopback;
 
 	QString m_sessionId;
-	int m_myId;
+	uint8_t m_myId;
 	bool m_isloopback;
 	bool m_recordedChat;
+	bool m_moderator;
+	bool m_isAuthenticated;
 
 	int m_catchupTo;
 	int m_caughtUp;
 	int m_catchupProgress;
-
-	canvas::ToolContext m_lastToolCtx;
 };
 
 }

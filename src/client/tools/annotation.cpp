@@ -41,8 +41,10 @@ Annotation::Annotation(ToolController &owner)
  * The annotation tool has fairly complex needs. Clicking on an existing
  * annotation selects it, otherwise a new annotation is started.
  */
-void Annotation::begin(const paintcore::Point& point, float zoom)
+void Annotation::begin(const paintcore::Point& point, bool right, float zoom)
 {
+	Q_UNUSED(right);
+
 	const paintcore::Annotation *selection = owner.model()->layerStack()->annotations()->annotationAtPos(point.toPoint(), zoom);
 	m_p1 = point;
 	m_p2 = point;
@@ -59,7 +61,7 @@ void Annotation::begin(const paintcore::Point& point, float zoom)
 	} else {
 		// No annotation, start creating a new one
 
-		if(owner.model()->aclFilter()->isAnnotationCreationLocked() && !owner.model()->aclFilter()->isLocalUserOperator()) {
+		if(!owner.model()->aclFilter()->canUseFeature(canvas::Feature::CreateAnnotation)) {
 			m_handle = paintcore::Annotation::OUTSIDE;
 			return;
 		}
@@ -133,7 +135,7 @@ void Annotation::end()
 		// Delete our preview annotation first
 		owner.model()->layerStack()->annotations()->deleteAnnotation(PREVIEW_ID);
 
-		int newId = owner.model()->getAvailableAnnotationId();
+		uint16_t newId = owner.model()->getAvailableAnnotationId();
 
 		if(newId==0) {
 			qWarning("We ran out of annotation IDs!");

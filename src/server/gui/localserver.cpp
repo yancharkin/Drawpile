@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2017 Calle Laakkonen
+   Copyright (C) 2017-2018 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -19,6 +19,8 @@
 
 #include "localserver.h"
 #include "multiserver.h"
+#include "../shared/server/sessionserver.h"
+#include "../shared/server/serverconfig.h"
 #include "../shared/util/whatismyip.h"
 
 #include <QSettings>
@@ -51,7 +53,7 @@ void LocalServer::onStartStop()
 
 QString LocalServer::address() const
 {
-	QString addr = m_server->announceLocalAddr();
+	QString addr = m_server->sessionServer()->config()->internalConfig().localHostname;
 	if(addr.isEmpty())
 		addr = WhatIsMyIp::instance()->myAddress();
 	return addr;
@@ -94,7 +96,13 @@ void LocalServer::startServer()
 		m_server->setMustSecure(false);
 	}
 
-	m_server->setAnnounceLocalAddr(cfg.value("local-address").toString());
+	InternalConfig icfg = m_server->config()->internalConfig();
+	icfg.localHostname = cfg.value("local-address").toString();
+#ifdef HAVE_LIBSODIUM
+	icfg.extAuthUrl = cfg.value("extauth").toString();
+#endif
+
+	m_server->config()->setInternalConfig(icfg);
 
 	if(cfg.value("session-storage").toString() == "file") {
 		QDir sessionDir = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + "/sessions";

@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2017 Calle Laakkonen
+   Copyright (C) 2017-2019 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -20,6 +20,7 @@
 #include "sessionsettings.h"
 #include "utils/listservermodel.h"
 #include "net/banlistmodel.h"
+#include "net/announcementlist.h"
 #include "document.h"
 #include "../shared/net/meta2.h"
 #include "canvas/canvasmodel.h"
@@ -30,64 +31,20 @@
 
 #include <QDebug>
 #include <QStringListModel>
-#include <QIdentityProxyModel>
 #include <QMenu>
 #include <QTimer>
 #include <QInputDialog>
 
 namespace dialogs {
 
-/**
- * @brief A proxy model that makes public listing server URL list nicer
- *
- * If the listing server is known, replace the URL with its name and icon
- */
-class ListingProxyModel : public QIdentityProxyModel {
-public:
-	ListingProxyModel(QObject *parent=nullptr)
-		: QIdentityProxyModel(parent)
-	{
-		sessionlisting::ListServerModel servermodel(false);
-		for(const sessionlisting::ListServer &s : servermodel.servers()) {
-			m_servers[s.url] = QPair<QIcon,QString>(s.icon, s.name);
-		}
-	}
-
-	QVariant data(const QModelIndex &proxyIndex, int role) const override
-	{
-		QVariant data = QAbstractProxyModel::data(proxyIndex, role);
-		if(role == Qt::DisplayRole && data.isValid()) {
-			QString url = data.toString();
-			if(m_servers.contains(url))
-				return m_servers[url].second;
-
-		} else if(role == Qt::DecorationRole) {
-			QString url = QAbstractProxyModel::data(proxyIndex, Qt::DisplayRole).toString();
-			if(m_servers.contains(url))
-				return m_servers[url].first;
-		} else if(role == Qt::UserRole) {
-			return QAbstractProxyModel::data(proxyIndex, Qt::DisplayRole);
-		}
-
-		return data;
-	}
-
-	Qt::ItemFlags flags(const QModelIndex &index) const override
-	{
-		if(index.isValid())
-			return Qt::ItemIsEnabled | Qt::ItemIsSelectable;
-		return 0;
-	}
-
-	QHash<QString,QPair<QIcon,QString>> m_servers;
-};
-
 SessionSettingsDialog::SessionSettingsDialog(Document *doc, QWidget *parent)
 	: QDialog(parent), m_ui(new Ui_SessionSettingsDialog), m_doc(doc),
-	  m_aclFlags(0), m_aclMask(0), m_canPersist(false)
+	  m_featureTiersChanged(false), m_canPersist(false)
 {
 	Q_ASSERT(doc);
 	m_ui->setupUi(this);
+
+	initPermissionComboBoxes();
 
 	connect(m_doc, &Document::canvasChanged, this, &SessionSettingsDialog::onCanvasChanged);
 
@@ -100,14 +57,12 @@ SessionSettingsDialog::SessionSettingsDialog(Document *doc, QWidget *parent)
 	connect(m_ui->title, &QLineEdit::textEdited, this, &SessionSettingsDialog::titleChanged);
 	connect(m_ui->maxUsers, &QSpinBox::editingFinished, this, &SessionSettingsDialog::maxUsersChanged);
 	connect(m_ui->denyJoins, &QCheckBox::clicked, this, &SessionSettingsDialog::denyJoinsChanged);
-	connect(m_ui->lockNewUsers, &QCheckBox::clicked, this, &SessionSettingsDialog::lockNewUsersChanged);
-	connect(m_ui->lockImages, &QCheckBox::clicked, this, &SessionSettingsDialog::lockImagesChanged);
-	connect(m_ui->lockAnnotations, &QCheckBox::clicked, this, &SessionSettingsDialog::lockAnnotationsChanged);
-	connect(m_ui->lockLayerCtrl, &QCheckBox::clicked, this, &SessionSettingsDialog::lockLayerCtrlChanged);
-	connect(m_ui->ownLayers, &QCheckBox::clicked, this, &SessionSettingsDialog::ownLayersChanged);
+	connect(m_ui->authOnly, &QCheckBox::clicked, this, &SessionSettingsDialog::authOnlyChanged);
+	connect(m_ui->autoresetThreshold, &QDoubleSpinBox::editingFinished, this, &SessionSettingsDialog::autoresetThresholdChanged);
 	connect(m_ui->preserveChat, &QCheckBox::clicked, this, &SessionSettingsDialog::keepChatChanged);
 	connect(m_ui->persistent, &QCheckBox::clicked, this, &SessionSettingsDialog::persistenceChanged);
 	connect(m_ui->nsfm, &QCheckBox::clicked, this, &SessionSettingsDialog::nsfmChanged);
+	connect(m_ui->deputies, static_cast<void (QComboBox::*)(int)>(&QComboBox::currentIndexChanged), this, &SessionSettingsDialog::deputiesChanged);
 
 	connect(m_ui->sessionPassword, &QLabel::linkActivated, this, &SessionSettingsDialog::changePassword);
 	connect(m_ui->opword, &QLabel::linkActivated, this, &SessionSettingsDialog::changeOpword);
@@ -116,16 +71,26 @@ SessionSettingsDialog::SessionSettingsDialog(Document *doc, QWidget *parent)
 	connect(m_doc, &Document::sessionPreserveChatChanged, m_ui->preserveChat, &QCheckBox::setChecked);
 	connect(m_doc, &Document::sessionPersistentChanged, m_ui->persistent, &QCheckBox::setChecked);
 	connect(m_doc, &Document::sessionClosedChanged, m_ui->denyJoins, &QCheckBox::setChecked);
-	connect(m_doc, &Document::sessionPasswordChanged, [this](bool hasPassword) {
+	connect(m_doc, &Document::sessionAuthOnlyChanged, this, [this](bool authOnly) {
+		m_ui->authOnly->setEnabled(m_op && (authOnly || m_isAuth));
+		m_ui->authOnly->setChecked(authOnly);
+	});
+	connect(m_doc, &Document::sessionPasswordChanged, this, [this](bool hasPassword) {
 		m_ui->sessionPassword->setProperty("haspass", hasPassword);
 		updatePasswordLabel(m_ui->sessionPassword);
 	});
-	connect(m_doc, &Document::sessionOpwordChanged, [this](bool hasPassword) {
+	connect(m_doc, &Document::sessionOpwordChanged, this, [this](bool hasPassword) {
 		m_ui->opword->setProperty("haspass", hasPassword);
 		updatePasswordLabel(m_ui->opword);
 	});
 	connect(m_doc, &Document::sessionNsfmChanged, m_ui->nsfm, &QCheckBox::setChecked);
+	connect(m_doc, &Document::sessionDeputiesChanged, this, [this](bool deputies) { m_ui->deputies->setCurrentIndex(deputies ? 1 : 0); });
 	connect(m_doc, &Document::sessionMaxUserCountChanged, m_ui->maxUsers, &QSpinBox::setValue);
+	connect(m_doc, &Document::sessionResetThresholdChanged, m_ui->autoresetThreshold, &QDoubleSpinBox::setValue);
+	connect(m_doc, &Document::baseResetThresholdChanged, this, [this](int threshold) {
+		m_ui->baseResetThreshold->setText(QStringLiteral("+ %1 MB").arg(threshold/(1024.0*1024.0), 0, 'g', 1));
+	});
+
 
 	// Set up banlist tab
 	m_ui->banlistView->setModel(doc->banlist());
@@ -138,29 +103,39 @@ SessionSettingsDialog::SessionSettingsDialog(Document *doc, QWidget *parent)
 	});
 
 	// Set up announcements tab
-	ListingProxyModel *listingProxy = new ListingProxyModel(this);
-	listingProxy->setSourceModel(doc->announcementList());
-	m_ui->announcementListView->setModel(listingProxy);
+	m_ui->announcementTableView->setModel(doc->announcementList());
+	QHeaderView *announcementHeader = m_ui->announcementTableView->horizontalHeader();
+	announcementHeader->setSectionResizeMode(0, QHeaderView::Stretch);
 
 	QMenu *addAnnouncementMenu = new QMenu(this);
+	QMenu *addPrivateAnnouncementMenu = new QMenu(this);
 
-	QHashIterator<QString,QPair<QIcon,QString>> i(listingProxy->m_servers);
+	QHashIterator<QString,QPair<QIcon,QString>> i(doc->announcementList()->knownServers());
 	while(i.hasNext()) {
 		auto item = i.next();
 		QAction *a = addAnnouncementMenu->addAction(item.value().first, item.value().second);
 		a->setProperty("API_URL", item.key());
+
+		QAction *a2 = addPrivateAnnouncementMenu->addAction(item.value().first, item.value().second);
+		a2->setProperty("API_URL", item.key());
 	}
 
 	m_ui->addAnnouncement->setMenu(addAnnouncementMenu);
+	m_ui->addPrivateAnnouncement->setMenu(addPrivateAnnouncementMenu);
 
 	connect(addAnnouncementMenu, &QMenu::triggered, [this](QAction *a) {
-		QString apiUrl = a->property("API_URL").toString();
-		qDebug() << "Requesting announcement:" << apiUrl;
-		m_doc->sendAnnounce(apiUrl);
+		const QString apiUrl = a->property("API_URL").toString();
+		qDebug() << "Requesting pbulic announcement:" << apiUrl;
+		m_doc->sendAnnounce(apiUrl, false);
+	});
+	connect(addPrivateAnnouncementMenu, &QMenu::triggered, [this](QAction *a) {
+		const QString apiUrl = a->property("API_URL").toString();
+		qDebug() << "Requesting private announcement:" << apiUrl;
+		m_doc->sendAnnounce(apiUrl, true);
 	});
 
 	connect(m_ui->removeAnnouncement, &QPushButton::clicked, [this]() {
-		auto sel = m_ui->announcementListView->selectionModel()->selection();
+		auto sel = m_ui->announcementTableView->selectionModel()->selection();
 		QString apiUrl;
 		if(!sel.isEmpty())
 			apiUrl = sel.first().indexes().first().data(Qt::UserRole).toString();
@@ -182,6 +157,11 @@ void SessionSettingsDialog::setPersistenceEnabled(bool enable)
 	m_canPersist = enable;
 }
 
+void SessionSettingsDialog::setAuthenticated(bool auth)
+{
+	m_isAuth = auth;
+}
+
 void SessionSettingsDialog::onCanvasChanged(canvas::CanvasModel *canvas)
 {
 	if(!canvas)
@@ -189,12 +169,11 @@ void SessionSettingsDialog::onCanvasChanged(canvas::CanvasModel *canvas)
 
 	canvas::AclFilter *acl = canvas->aclFilter();
 
-	connect(acl, &canvas::AclFilter::layerControlLockChanged, m_ui->lockLayerCtrl, &QCheckBox::setChecked);
-	connect(acl, &canvas::AclFilter::ownLayersChanged, m_ui->ownLayers, &QCheckBox::setChecked);
-	connect(acl, &canvas::AclFilter::imageCmdLockChanged, m_ui->lockImages, &QCheckBox::setChecked);
-	connect(acl, &canvas::AclFilter::lockByDefaultChanged, m_ui->lockNewUsers, &QCheckBox::setChecked);
-	connect(acl, &canvas::AclFilter::annotationCreationLockChanged, m_ui->lockAnnotations, &QCheckBox::setChecked);
 	connect(acl, &canvas::AclFilter::localOpChanged, this, &SessionSettingsDialog::onOperatorModeChanged);
+	connect(acl, &canvas::AclFilter::featureTierChanged, this, &SessionSettingsDialog::onFeatureTierChanged);
+
+	for(int i=0;i<canvas::FeatureCount;++i)
+		onFeatureTierChanged(canvas::Feature(i), acl->featureTier(canvas::Feature(i)));
 }
 
 void SessionSettingsDialog::onOperatorModeChanged(bool op)
@@ -203,13 +182,9 @@ void SessionSettingsDialog::onOperatorModeChanged(bool op)
 		m_ui->title,
 		m_ui->maxUsers,
 		m_ui->denyJoins,
-		m_ui->lockNewUsers,
-		m_ui->lockImages,
-		m_ui->lockAnnotations,
-		m_ui->lockLayerCtrl,
-		m_ui->ownLayers,
 		m_ui->preserveChat,
 		m_ui->nsfm,
+		m_ui->deputies,
 		m_ui->sessionPassword,
 		m_ui->opword,
 		m_ui->addAnnouncement,
@@ -219,9 +194,62 @@ void SessionSettingsDialog::onOperatorModeChanged(bool op)
 	m_op = op;
 	for(unsigned int i=0;i<sizeof(w)/sizeof(*w);++i)
 		w[i]->setEnabled(op);
+
+	for(int i=0;i<canvas::FeatureCount;++i)
+		featureBox(canvas::Feature(i))->setEnabled(op);
+
 	m_ui->persistent->setEnabled(m_canPersist && op);
+	m_ui->authOnly->setEnabled(op && (m_isAuth || m_ui->authOnly->isChecked()));
 	updatePasswordLabel(m_ui->sessionPassword);
 	updatePasswordLabel(m_ui->opword);
+}
+
+QComboBox *SessionSettingsDialog::featureBox(canvas::Feature f)
+{
+	switch(f) {
+	using canvas::Feature;
+	case Feature::PutImage: return m_ui->permPutImage;
+	case Feature::RegionMove: return m_ui->permRegionMove;
+	case Feature::Resize: return m_ui->permResize;
+	case Feature::Background: return m_ui->permBackground;
+	case Feature::EditLayers: return m_ui->permEditLayers;
+	case Feature::OwnLayers: return m_ui->permOwnLayers;
+	case Feature::CreateAnnotation: return m_ui->permCreateAnnotation;
+	case Feature::Laser: return m_ui->permLaser;
+	case Feature::Undo: return m_ui->permUndo;
+	}
+	Q_ASSERT_X(false, "featureBox", "unhandled case");
+	return nullptr;
+}
+void SessionSettingsDialog::onFeatureTierChanged(canvas::Feature feature, canvas::Tier tier)
+{
+	featureBox(feature)->setCurrentIndex(int(tier));
+}
+
+void SessionSettingsDialog::initPermissionComboBoxes()
+{
+	// Note: these must match the canvas::Tier enum
+	const QString items[] = {
+		tr("Operators"),
+		tr("Trusted"),
+		tr("Registered"),
+		tr("Everyone")
+	};
+
+	for(uint i=0;i<canvas::FeatureCount;++i) {
+		QComboBox *box = featureBox(canvas::Feature(i));
+		for(uint j=0;j<sizeof(items)/sizeof(QString);++j)
+			box->addItem(items[j]);
+
+		box->setProperty("featureIdx", i);
+		connect(box, static_cast<void (QComboBox::*)(int)>(&QComboBox::activated), this, &SessionSettingsDialog::permissionChanged);
+	}
+}
+
+void SessionSettingsDialog::permissionChanged()
+{
+	m_featureTiersChanged = true;
+	m_saveTimer->start();
 }
 
 void SessionSettingsDialog::updatePasswordLabel(QLabel *label)
@@ -250,10 +278,13 @@ void SessionSettingsDialog::sendSessionConf()
 		m_sessionconf = QJsonObject();
 	}
 
-	if(m_aclMask | m_aclFlags) {
-		m_doc->sendSessionAclChange(m_aclFlags, m_aclMask);
-		m_aclFlags = 0;
-		m_aclMask = 0;
+	if(m_featureTiersChanged) {
+		uint8_t tiers[canvas::FeatureCount];
+		for(int i=0;i<canvas::FeatureCount;++i)
+			tiers[i] = featureBox(canvas::Feature(i))->currentIndex();
+
+		m_doc->sendFeatureAccessLevelChange(tiers);
+		m_featureTiersChanged = false;
 	}
 }
 
@@ -268,26 +299,21 @@ void SessionSettingsDialog::changeSesionConf(const QString &key, const QJsonValu
 	}
 }
 
-void SessionSettingsDialog::changeSessionAcl(uint16_t flag, bool set)
-{
-	m_aclMask |= flag;
-	if(set)
-		m_aclFlags |= flag;
-	m_saveTimer->start();
-}
-
 void SessionSettingsDialog::titleChanged(const QString &title) { changeSesionConf("title", title); }
 void SessionSettingsDialog::maxUsersChanged() { changeSesionConf("maxUserCount", m_ui->maxUsers->value()); }
 void SessionSettingsDialog::denyJoinsChanged(bool set) { changeSesionConf("closed", set); }
-void SessionSettingsDialog::lockNewUsersChanged(bool set) { changeSessionAcl(protocol::SessionACL::LOCK_DEFAULT, set); }
-void SessionSettingsDialog::lockImagesChanged(bool set) { changeSessionAcl(protocol::SessionACL::LOCK_IMAGES, set); }
-void SessionSettingsDialog::lockAnnotationsChanged(bool set) { changeSessionAcl(protocol::SessionACL::LOCK_ANNOTATIONS, set); }
-void SessionSettingsDialog::lockLayerCtrlChanged(bool set) { changeSessionAcl(protocol::SessionACL::LOCK_LAYERCTRL, set); }
-void SessionSettingsDialog::ownLayersChanged(bool set) { changeSessionAcl(protocol::SessionACL::LOCK_OWNLAYERS, set); }
+void SessionSettingsDialog::authOnlyChanged(bool set)
+{
+	changeSesionConf("authOnly", set);
+	if(!set && !m_isAuth)
+		m_ui->authOnly->setEnabled(false);
+}
 
+void SessionSettingsDialog::autoresetThresholdChanged() { changeSesionConf("resetThreshold", int(m_ui->autoresetThreshold->value()* 1024 * 1024)); }
 void SessionSettingsDialog::keepChatChanged(bool set) { changeSesionConf("preserveChat", set); }
 void SessionSettingsDialog::persistenceChanged(bool set) { changeSesionConf("persistent", set); }
 void SessionSettingsDialog::nsfmChanged(bool set) { changeSesionConf("nsfm", set); }
+void SessionSettingsDialog::deputiesChanged(int idx) { changeSesionConf("deputies", idx>0); }
 
 void SessionSettingsDialog::changePassword()
 {

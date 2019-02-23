@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2017 Calle Laakkonen
+   Copyright (C) 2017-2019 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -124,13 +124,23 @@ bool TemplateFiles::init(SessionHistory *session) const
 	// Set session metadata
 	Q_ASSERT(protocol::ProtocolVersion::fromString(reader.metadata().value("version").toString()) == session->protocolVersion());
 	session->setMaxUsers(reader.metadata().value("maxUserCount").toInt(25));
-	session->setPassword(reader.metadata().value("password").toString());
+	session->setPasswordHash(reader.metadata().value("password").toString().toUtf8());
+	session->setOpwordHash(reader.metadata().value("opword").toString().toUtf8());
 	session->setTitle(reader.metadata().value("title").toString());
+
+	if(reader.metadata().contains("announce")) {
+		session->addAnnouncement(reader.metadata()["announce"].toString());
+	}
+
 	SessionHistory::Flags flags;
 	if(reader.metadata().value("nsfm").toBool())
 		flags |= SessionHistory::Nsfm;
 	if(reader.metadata().value("persistent").toBool())
 		flags |= SessionHistory::Persistent;
+	if(reader.metadata().value("preserveChat").toBool())
+		flags |= SessionHistory::PreserveChat;
+	if(reader.metadata().value("deputies").toBool())
+		flags |= SessionHistory::Deputies;
 	session->setFlags(flags);
 
 	// Set initial history
@@ -139,10 +149,10 @@ bool TemplateFiles::init(SessionHistory *session) const
 		recording::MessageRecord r = reader.readNext();
 		switch(r.status) {
 		case recording::MessageRecord::OK:
-			session->addMessage(protocol::MessagePtr(r.message));
+			session->addMessage(protocol::MessagePtr::fromNullable(r.message));
 			break;
 		case recording::MessageRecord::INVALID:
-			qWarning("%s: Invalid message (type %d, len %d) in template!", qPrintable(session->idAlias()), r.error.type, r.error.len);
+			qWarning("%s: Invalid message (type %d, len %d) in template!", qPrintable(session->idAlias()), r.invalid_type, r.invalid_len);
 			break;
 		case recording::MessageRecord::END_OF_RECORDING:
 			keepReading = false;

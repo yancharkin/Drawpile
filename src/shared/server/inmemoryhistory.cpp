@@ -29,6 +29,7 @@ InMemoryHistory::InMemoryHistory(const QUuid &id, const QString &alias, const pr
 	  m_version(version),
 	  m_startTime(QDateTime::currentDateTime()),
 	  m_maxUsers(254),
+	  m_autoReset(0),
 	  m_flags(0)
 {
 }
@@ -53,17 +54,6 @@ void InMemoryHistory::historyReset(const QList<protocol::MessagePtr> &newHistory
 {
 	m_history = newHistory;
 }
-
-void InMemoryHistory::setPassword(const QString &password)
-{
-	m_password = passwordhash::hash(password);
-}
-
-void InMemoryHistory::setOpword(const QString &opword)
-{
-	m_opword = passwordhash::hash(opword);
-}
-
 
 }
 

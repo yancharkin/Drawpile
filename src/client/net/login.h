@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2013-2017 Calle Laakkonen
+   Copyright (C) 2013-2018 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -27,6 +27,9 @@
 #include <QPointer>
 #include <QSslError>
 #include <QFileInfo>
+#include <QByteArray>
+
+class QImage;
 
 namespace protocol {
 	struct ServerCommand;
@@ -60,7 +63,7 @@ public:
 	 *
 	 * @param userid
 	 */
-	void setUserId(int userid) { Q_ASSERT(m_mode==HOST); m_userid=userid; }
+	void setUserId(uint8_t userid) { Q_ASSERT(m_mode==HOST); m_userid=userid; }
 
 	/**
 	 * @brief Set desired session ID alias
@@ -89,49 +92,6 @@ public:
 	void setTitle(const QString &title) { Q_ASSERT(m_mode==HOST); m_title=title; }
 
 	/**
-	 * @brief Set the maximum number of users the session will accept
-	 *
-	 * Only for host mode.
-	 *
-	 * @param maxusers
-	 */
-	void setMaxUsers(int maxusers) { Q_ASSERT(m_mode==HOST); m_maxusers = maxusers; }
-
-	/**
-	 * @brief Set whether new users should be locked by default
-	 *
-	 * Only for host mode.
-	 *
-	 * @param allowdrawing
-	 */
-	void setAllowDrawing(bool allowdrawing) { Q_ASSERT(m_mode==HOST); m_allowdrawing = allowdrawing; }
-
-	/**
-	 * @brief Set whether layer controls should be locked to operators only by default
-	 *
-	 * Only for host mode.
-	 *
-	 * @param layerlock
-	 */
-	void setLayerControlLock(bool layerlock) { Q_ASSERT(m_mode==HOST); m_layerctrllock = layerlock; }
-
-	/**
-	 * @brief Set whether the session should be persistent
-	 *
-	 * Only for host mode. Whether this option actually gets set depends on whether the server
-	 * supports persistent sessions.
-	 *
-	 * @param persistent
-	 */
-	void setPersistentSessions(bool persistent) { Q_ASSERT(m_mode==HOST); m_requestPersistent = persistent; }
-
-	/**
-	 * @brief Set whether chat history should be preserved in the session
-	 */
-	void setPreserveChat(bool preserve) { Q_ASSERT(m_mode==HOST); m_preserveChat = preserve; }
-	bool isPreservedChat() const { return m_preserveChat; }
-
-	/**
 	 * @brief Set the initial session content to upload to the server
 	 * @param msgs
 	 */
@@ -140,7 +100,7 @@ public:
 	/**
 	 * @brief Set session announcement URL
 	 */
-	void setAnnounceUrl(const QString &url) { Q_ASSERT(m_mode==HOST); m_announceUrl = url; }
+	void setAnnounceUrl(const QString &url, bool privateMode) { Q_ASSERT(m_mode==HOST); m_announceUrl = url; m_announcePrivate = privateMode; }
 
 	/**
 	 * @brief Set the server we're communicating with
@@ -170,7 +130,7 @@ public:
 	 * @brief get the user ID assigned by the server
 	 * @return user id
 	 */
-	int userId() const { return m_userid; }
+	uint8_t userId() const { return m_userid; }
 
 	/**
 	 * @brief get the ID of the session.
@@ -185,18 +145,47 @@ public:
 	 */
 	bool supportsPersistence() const { return m_canPersist; }
 
+	/**
+	 * @brief Can the server receive abuse reports?
+	 */
+	bool supportsAbuseReports() const { return m_canReport; }
+
+	/**
+	 * @brief Check if the user has the given flag
+	 *
+	 * This is only valid after the user has identified succesfully
+	 *
+	 * @param flag
+	 * @return
+	 */
+	bool hasUserFlag(const QString &flag) const;
+
+	/**
+	 * @brief Did the user authenticate succesfully?
+	 */
+	bool isAuthenticated() const { return !m_isGuest; }
+
 public slots:
 	void serverDisconnected();
 
 	/**
 	 * @brief Send password
 	 *
-	 * Call this in response to the needPassword signal after
+	 * Call this in response to the needSessionPassword signal after
 	 * the user has entered their password.
 	 *
 	 * @param password
 	 */
-	void gotPassword(const QString &password);
+	void sendSessionPassword(const QString &password);
+
+	/**
+	 * @brief Select the avatar to use
+	 *
+	 * Call this BEFORE calling selectIdentity for the first time.
+	 *
+	 * @param avatar
+	 */
+	void selectAvatar(const QImage &avatar);
 
 	/**
 	 * @brief Send identity
@@ -208,6 +197,18 @@ public slots:
 	 * @param username
 	 */
 	void selectIdentity(const QString &username, const QString &password);
+
+	/**
+	 * @brief Log in using an extauth token
+	 *
+	 * This is the extauth path equivalent to selectIdentity()
+	 * A HTTP POST request will be made to the extauth URL with
+	 * the given username and password. If authentication is successful,
+	 * login will proceed with the returned token.
+	 *
+	 * @param
+	 */
+	void requestExtAuth(const QString &username, const QString &password);
 
 	/**
 	 * @brief Join the session with the given ID
@@ -232,17 +233,35 @@ public slots:
 	 */
 	void cancelLogin();
 
+	/**
+	 * @brief Send an abuse report about a session
+	 * @param id ID of the session being reported
+	 * @param reason message to moderators
+	 */
+	void reportSession(const QString &id, const QString &reason);
+
 signals:
+	/**
+	 * @brief The user must enter a username to proceed
+	 *
+	 * This is emitted if no username was set in the URL.
+	 *
+	 * Proceed by calling selectIdentity(username, QString())
+	 * (omit password at this point to attempt a guest login)
+	 *
+	 * @param canSelectCustomAvatar is true if the server has announced that it accepts custom avatars
+	 */
+	void usernameNeeded(bool canSelectCustomAvatar);
+
 	/**
 	 * @brief The user must enter a password to proceed
 	 *
-	 * This is emitted when a session is password protected.
+	 * This is emitted when attempting to join a session that is password protected.
 	 * After the user has made a decision, call either
-	 * gotPassword(password) to proceed or cancelLogin() to exit.
+	 * sendSessionPassword(password) to proceed or cancelLogin() to exit.
 	 *
-	 * @param prompt prompt text
 	 */
-	void passwordNeeded(const QString &prompt);
+	void sessionPasswordNeeded();
 
 	/**
 	 * @brief Login details are needeed to proceed
@@ -256,6 +275,34 @@ signals:
 	 * @param prompt prompt text
 	 */
 	void loginNeeded(const QString &prompt);
+
+	/**
+	 * @brief External authentication is needed
+	 *
+	 * This is similar to loginNeeded(), except an auth server at the given URL
+	 * should be used to perform the authentication.
+	 *
+	 * Proceed by calling requestExtUath(username, password) or cancelLogin()
+	 *
+	 * @param url ext auth server URL
+	 */
+	void extAuthNeeded(const QUrl &url);
+
+	/**
+	 * @brief External authentication request completed
+	 * @param success did the request complete successfully?
+	 */
+	void extAuthComplete(bool success);
+
+	/**
+	 * @brief Username and password (unless in guest mode) OK.
+	 */
+	void loginOk();
+
+	/**
+	 * @brief Server user account password was wrong
+	 */
+	void badLoginPassword();
 
 	/**
 	 * @brief User must select which session to join
@@ -292,6 +339,7 @@ private:
 		EXPECT_HELLO,
 		EXPECT_STARTTLS,
 		WAIT_FOR_LOGIN_PASSWORD,
+		WAIT_FOR_EXTAUTH,
 		EXPECT_IDENTIFIED,
 		EXPECT_SESSIONLIST_TO_JOIN,
 		EXPECT_SESSIONLIST_TO_HOST,
@@ -320,23 +368,24 @@ private:
 
 	Mode m_mode;
 	QUrl m_address;
+	QByteArray m_avatar;
 
 	// Settings for hosting
-	int m_userid;
+	uint8_t m_userid;
 	QString m_sessionPassword;
 	QString m_sessionAlias;
 	QString m_title;
-	int m_maxusers;
-	bool m_allowdrawing;
-	bool m_layerctrllock;
-	bool m_requestPersistent;
-	bool m_preserveChat;
+	bool m_announcePrivate;
 	QString m_announceUrl;
 	QList<protocol::MessagePtr> m_initialState;
 
 	// Settings for joining
 	QString m_joinPassword;
 	QString m_autoJoinId;
+
+	QUrl m_extAuthUrl;
+	QString m_extAuthGroup;
+	QString m_extAuthNonce;
 
 	// Process state
 	TcpServer *m_server;
@@ -352,8 +401,15 @@ private:
 	bool m_multisession;
 	bool m_tls;
 	bool m_canPersist;
+	bool m_canReport;
 	bool m_mustAuth;
 	bool m_needUserPassword;
+	bool m_supportsCustomAvatars;
+	bool m_supportsExtAuthAvatars;
+
+	// User flags
+	QStringList m_userFlags;
+	bool m_isGuest;
 };
 
 }

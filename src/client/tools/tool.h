@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2006-2015 Calle Laakkonen
+   Copyright (C) 2006-2019 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -41,7 +41,13 @@ class ToolController;
 class Tool
 {
 public:
-	enum Type {PEN, BRUSH, SMUDGE, ERASER, LINE, RECTANGLE, ELLIPSE, FLOODFILL, ANNOTATION, PICKER, LASERPOINTER, SELECTION, POLYGONSELECTION, _LASTTOOL};
+	enum Type {
+		FREEHAND, ERASER, LINE, RECTANGLE, ELLIPSE, BEZIER,
+		FLOODFILL, ANNOTATION,
+		PICKER, LASERPOINTER,
+		SELECTION, POLYGONSELECTION,
+		ZOOM,
+		_LASTTOOL};
 
 	Tool(ToolController &owner, Type type, const QCursor &cursor)
 		: owner(owner), m_type(type), m_cursor(cursor)
@@ -57,7 +63,7 @@ public:
 	 * @param right is the right mouse/pen button pressed instead of the left one
 	 * @param zoom the current view zoom factor
 	 */
-	virtual void begin(const paintcore::Point& point, float zoom) = 0;
+	virtual void begin(const paintcore::Point& point, bool right, float zoom) = 0;
 
 	/**
 	 * @brief Continue a stroke
@@ -67,8 +73,26 @@ public:
 	 */
 	virtual void motion(const paintcore::Point& point, bool constrain, bool center) = 0;
 
+	/**
+	 * @brief Tool hovering over the canvas
+	 * @param point tool position
+	 */
+	virtual void hover(const QPointF &point) { Q_UNUSED(point); }
+
 	//! End stroke
 	virtual void end() = 0;
+
+	//! Finish and commit a multipart stroke
+	virtual void finishMultipart() { }
+
+	//! Cancel the current multipart stroke (if any)
+	virtual void cancelMultipart() { }
+
+	//! Undo the latest step of a multipart stroke. Undoing the first part should cancel the stroke
+	virtual void undoMultipart() { }
+
+	//! Is there a multipart stroke in progress at the moment?
+	virtual bool isMultipart() const { return false; }
 
 	//! Does this tool allow stroke smoothing to be used?
 	virtual bool allowSmoothing() const { return false; }

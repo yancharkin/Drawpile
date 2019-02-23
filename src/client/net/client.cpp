@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2013-2015 Calle Laakkonen
+   Copyright (C) 2013-2019 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -43,6 +43,8 @@ Client::Client(QObject *parent)
 	m_loopback = new LoopbackServer(this);
 	m_server = m_loopback;
 	m_isloopback = true;
+	m_moderator = false;
+	m_isAuthenticated = false;
 
 	connect(m_loopback, &LoopbackServer::messageReceived, this, &Client::handleMessage);
 }
@@ -75,8 +77,6 @@ void Client::connectToServer(LoginHandler *loginhandler)
 	emit serverConnected(loginhandler->url().host(), loginhandler->url().port());
 	server->login(loginhandler);
 
-	m_lastToolCtx = canvas::ToolContext();
-
 	m_catchupTo = 0;
 	m_caughtUp = 0;
 	m_catchupProgress = 0;
@@ -105,10 +105,12 @@ QUrl Client::sessionUrl(bool includeUser) const
 	return url;
 }
 
-void Client::handleConnect(const QString &sessionId, int userid, bool join)
+void Client::handleConnect(const QString &sessionId, uint8_t userid, bool join, bool auth, bool moderator)
 {
 	m_sessionId = sessionId;
 	m_myId = userid;
+	m_moderator = moderator;
+	m_isAuthenticated = auth;
 
 	emit serverLoggedin(join);
 }
@@ -121,6 +123,7 @@ void Client::handleDisconnect(const QString &message,const QString &errorcode, b
 	m_server->deleteLater();
 	m_server = m_loopback;
 	m_isloopback = true;
+	m_moderator = false;
 }
 
 bool Client::isLocalServer() const
@@ -159,6 +162,11 @@ void Client::sendMessages(const QList<protocol::MessagePtr> &msgs)
 		if(msg->isCommand())
 			emit drawingCommandLocal(msg);
 	}
+	m_server->sendMessages(msgs);
+}
+
+void Client::sendResetMessages(const QList<protocol::MessagePtr> &msgs)
+{
 	m_server->sendMessages(msgs);
 }
 
@@ -270,8 +278,13 @@ void Client::handleServerCommand(const protocol::Command &msg)
 		emit sessionConfChange(reply.reply["config"].toObject());
 		break;
 	case ServerReply::SIZELIMITWARNING:
-		qWarning() << "Session history size warning:" << reply.reply["maxSize"].toInt() - reply.reply["size"].toInt() << "bytes of space left!";
-		emit serverHistoryLimitReceived(reply.reply["maxSize"].toInt());
+		// No longer used since 2.1.0. Replaced by RESETREQUEST
+		break;
+	case ServerReply::RESETREQUEST:
+		emit autoresetRequested(reply.reply["maxSize"].toInt(), reply.reply["query"].toBool());
+		break;
+	case ServerReply::STATUS:
+		emit serverStatusUpdate(reply.reply["size"].toInt());
 		break;
 	case ServerReply::RESET:
 		handleResetRequest(reply);

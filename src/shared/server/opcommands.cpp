@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2014-2017 Calle Laakkonen
+   Copyright (C) 2014-2019 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -48,9 +48,10 @@ typedef void (*SrvCommandFn)(Client *, const QJsonArray &, const QJsonObject &);
 class SrvCommand {
 public:
 	enum Mode {
-		NONOP, // usable by all
-		OP,    // needs OP privileges
-		MOD    // needs MOD privileges
+		NONOP,  // usable by all
+		DEPUTY, // needs at least deputy privileges
+		OP,     // needs operator privileges
+		MOD     // needs moderator privileges
 	};
 
 	SrvCommand(const QString &name, SrvCommandFn fn, Mode mode=OP)
@@ -76,11 +77,32 @@ struct SrvCommandSet {
 
 const SrvCommandSet COMMANDS;
 
+void readyToAutoReset(Client *client, const QJsonArray &args, const QJsonObject &kwargs)
+{
+	Q_UNUSED(args);
+	Q_UNUSED(kwargs);
+	client->session()->readyToAutoReset(client->id());
+}
+
+void initBegin(Client *client, const QJsonArray &args, const QJsonObject &kwargs)
+{
+	Q_UNUSED(args);
+	Q_UNUSED(kwargs);
+	client->session()->handleInitBegin(client->id());
+}
+
 void initComplete(Client *client, const QJsonArray &args, const QJsonObject &kwargs)
 {
 	Q_UNUSED(args);
 	Q_UNUSED(kwargs);
 	client->session()->handleInitComplete(client->id());
+}
+
+void initCancel(Client *client, const QJsonArray &args, const QJsonObject &kwargs)
+{
+	Q_UNUSED(args);
+	Q_UNUSED(kwargs);
+	client->session()->handleInitCancel(client->id());
 }
 
 void sessionConf(Client *client, const QJsonArray &args, const QJsonObject &kwargs)
@@ -100,14 +122,7 @@ void opWord(Client *client, const QJsonArray &args, const QJsonObject &kwargs)
 		throw CmdError("No opword set");
 
 	if(passwordhash::check(args.at(0).toString(), opwordHash)) {
-		client->setOperator(true);
-
-		QList<uint8_t> ids;
-		for(const Client *c : client->session()->clients())
-			if(c->isOperator())
-				ids << c->id();
-
-		client->session()->addToHistory(protocol::MessagePtr(new protocol::SessionOwner(0, ids)));
+		client->session()->changeOpStatus(client->id(), true, "password");
 
 	} else {
 		throw CmdError("Incorrect password");
@@ -148,6 +163,11 @@ void kickUser(Client *client, const QJsonArray &args, const QJsonObject &kwargs)
 	if(target->isModerator())
 		throw CmdError("cannot kick moderators");
 
+	if(client->isDeputy()) {
+		if(target->isOperator() || target->isTrusted())
+			throw CmdError("cannot kick trusted users");
+	}
+
 	if(kwargs["ban"].toBool()) {
 		client->session()->addBan(target, client->username());
 		client->session()->messageAll(target->username() + " banned by " + client->username(), false);
@@ -178,7 +198,6 @@ void killSession(Client *client, const QJsonArray &args, const QJsonObject &kwar
 
 void announceSession(Client *client, const QJsonArray &args, const QJsonObject &kwargs)
 {
-	Q_UNUSED(kwargs);
 	if(args.size()!=1)
 		throw CmdError("Expected one argument: API URL");
 
@@ -186,7 +205,7 @@ void announceSession(Client *client, const QJsonArray &args, const QJsonObject &
 	if(!apiUrl.isValid())
 		throw CmdError("Invalid API URL");
 
-	client->session()->makeAnnouncement(apiUrl);
+	client->session()->makeAnnouncement(apiUrl, kwargs["private"].toBool());
 }
 
 void unlistSession(Client *client, const QJsonArray &args, const QJsonObject &kwargs)
@@ -229,12 +248,25 @@ void setMute(Client *client, const QJsonArray &args, const QJsonObject &kwargs)
 	}
 }
 
+void reportAbuse(Client *client, const QJsonArray &args, const QJsonObject &kwargs)
+{
+	Q_UNUSED(args);
+
+	const int user = kwargs["user"].toInt();
+	const QString reason = kwargs["reason"].toString();
+
+	client->session()->sendAbuseReport(client, user, reason);
+}
+
 SrvCommandSet::SrvCommandSet()
 {
 	commands
+		<< SrvCommand("ready-to-autoreset", readyToAutoReset)
+		<< SrvCommand("init-begin", initBegin)
 		<< SrvCommand("init-complete", initComplete)
+		<< SrvCommand("init-cancel", initCancel)
 		<< SrvCommand("sessionconf", sessionConf)
-		<< SrvCommand("kick-user", kickUser)
+		<< SrvCommand("kick-user", kickUser, SrvCommand::DEPUTY)
 		<< SrvCommand("gain-op", opWord, SrvCommand::NONOP)
 
 		<< SrvCommand("reset-session", resetSession)
@@ -245,6 +277,8 @@ SrvCommandSet::SrvCommandSet()
 
 		<< SrvCommand("remove-ban", removeBan)
 		<< SrvCommand("mute", setMute)
+
+		<< SrvCommand("report", reportAbuse, SrvCommand::NONOP)
 	;
 }
 
@@ -260,6 +294,10 @@ void handleClientServerCommand(Client *client, const QString &command, const QJs
 			}
 			else if(c.mode() == SrvCommand::OP && !client->isOperator()) {
 				client->sendDirectMessage(protocol::Command::error("Not a session owner"));
+				return;
+			}
+			else if(c.mode() == SrvCommand::DEPUTY && !client->isOperator() && !client->isDeputy()) {
+				client->sendDirectMessage(protocol::Command::error("Not a session owner or a deputy"));
 				return;
 			}
 

@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2014-2017 Calle Laakkonen
+   Copyright (C) 2014-2019 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -174,7 +174,6 @@ static Reader::Encoding detectEncoding(QIODevice *dev)
 		case Parser::Result::Ok:
 		case Parser::Result::NeedMore:
 			// Got a valid command: this really looks like a valid recording
-			delete res.msg;
 			return Reader::Encoding::Text;
 			break;
 		case Parser::Result::Skip:
@@ -249,7 +248,7 @@ Compatibility Reader::readBinaryHeader() {
 
 	if(d->opaque) {
 		// In opaque mode, it's enough that the server version matches
-		if(version.server() == current.server())
+		if(version.serverVersion() == current.serverVersion())
 			return COMPATIBLE;
 
 	} else {
@@ -257,12 +256,21 @@ Compatibility Reader::readBinaryHeader() {
 		if(version.ns() != current.ns())
 			return NOT_DPREC;
 
+		// Backwards compatible mode:
+		// TODO
+
+		// Strict compatibility mode:
+
 		// A recording made with a newer (major) version may contain unsupported commands.
-		if(current.major() < version.major())
+		if(current.majorVersion() < version.majorVersion())
 			return UNKNOWN_COMPATIBILITY;
 
-		// Newer minor version: expect rendering differences
-		if(current.minor() < version.minor())
+		// Versions older than 20.x are known to be incompatible
+		if(version.majorVersion() < 20)
+			return INCOMPATIBLE;
+
+		// Different minor version: expect rendering differences
+		if(current.minorVersion() != version.minorVersion())
 			return MINOR_INCOMPATIBILITY;
 	}
 
@@ -295,7 +303,6 @@ Compatibility Reader::readTextHeader()
 		case Parser::Result::NeedMore:
 		case Parser::Result::Ok:
 			// First message found, meaning the header section (if there was any) is over
-			delete res.msg;
 			done = true;
 			break;
 		}
@@ -335,7 +342,7 @@ Compatibility Reader::readTextHeader()
 
 	if(d->opaque) {
 		// In opaque mode, version must match exactly, except for the minor number
-		if(version.ns() == current.ns() && version.server() == current.server() && version.major() == current.major())
+		if(version.ns() == current.ns() && version.serverVersion() == current.serverVersion() && version.majorVersion() == current.majorVersion())
 			return COMPATIBLE;
 
 	} else {
@@ -343,15 +350,21 @@ Compatibility Reader::readTextHeader()
 		if(version.ns() != current.ns())
 			return NOT_DPREC;
 
+		// Backwards compatible mode:
+		// TODO
+
+		// Strict compatibilty mode:
 		// A recording made with a newer (major) version may contain unsupported commands.
-		if(current.major() < version.major())
+		if(current.majorVersion() < version.majorVersion())
 			return UNKNOWN_COMPATIBILITY;
 
-		// Newer minor version: expect rendering differences
-		if(current.minor() < version.minor())
-			return MINOR_INCOMPATIBILITY;
+		// Versions older than 20.x are known to be incompatible
+		if(version.majorVersion() < 20)
+			return INCOMPATIBLE;
 
-		// TODO older versions may be fully supported in the text encoding
+		// Different minor version: expect rendering differences
+		if(current.minorVersion() != version.minorVersion())
+			return MINOR_INCOMPATIBILITY;
 	}
 
 	// Other versions are not supported
@@ -400,7 +413,7 @@ void Reader::seekTo(int pos, qint64 position)
 	d->eof = false;
 }
 
-static protocol::Message *readTextMessage(QIODevice *file, bool *eof)
+static protocol::NullableMessageRef readTextMessage(QIODevice *file, bool *eof)
 {
 	Parser parser;
 	while(1) {
@@ -437,13 +450,12 @@ bool Reader::readNextToBuffer(QByteArray &buffer)
 		}
 
 	} else {
-		protocol::Message *msg = readTextMessage(d->file, &d->eof);
-		if(!msg)
+		protocol::NullableMessageRef msg = readTextMessage(d->file, &d->eof);
+		if(msg.isNull())
 			return false;
 		if(buffer.length() < msg->length())
 			buffer.resize(msg->length());
 		msg->serialize(buffer.data());
-		delete msg;
 	}
 
 	++d->current;
@@ -454,41 +466,36 @@ bool Reader::readNextToBuffer(QByteArray &buffer)
 MessageRecord Reader::readNext()
 {
 	Q_ASSERT(d->encoding != Encoding::Autodetect);
-	MessageRecord msg;
 
 	if(d->encoding == Encoding::Binary) {
 		if(!readNextToBuffer(d->msgbuf))
-			return msg;
+			return MessageRecord::Eor();
 
-		protocol::Message *message;
+		protocol::NullableMessageRef message;
 		message = protocol::Message::deserialize((const uchar*)d->msgbuf.constData(), d->msgbuf.length(), !d->opaque);
 
-		if(message) {
-			msg.status = MessageRecord::OK;
-			msg.message = message;
-		} else {
-			msg.status = MessageRecord::INVALID;
-			msg.error.len = protocol::Message::sniffLength(d->msgbuf.constData());
-			msg.error.type = protocol::MessageType(d->msgbuf.at(2));
-		}
+		if(message.isNull())
+			return MessageRecord::Invalid(
+				protocol::Message::sniffLength(d->msgbuf.constData()),
+				protocol::MessageType(d->msgbuf.at(2))
+			);
+		else
+			return MessageRecord::Ok(message);
 
 	} else {
 		d->currentPos = filePosition();
-		protocol::Message *message = readTextMessage(d->file, &d->eof);
+		protocol::NullableMessageRef message = readTextMessage(d->file, &d->eof);
 		if(!d->eof) {
-			if(message) {
-				msg.status = MessageRecord::OK;
-				msg.message = message;
-				++d->current;
-			} else {
-				msg.status = MessageRecord::INVALID;
-				msg.error.len = 0;
-				msg.error.type = protocol::MSG_COMMAND;
-			}
+			if(message.isNull())
+				return MessageRecord::Invalid(0, protocol::MSG_COMMAND);
+
+			++d->current;
+			return MessageRecord::Ok(message);
 		}
 	}
 
-	return msg;
+	return MessageRecord::Eor();
 }
 
 }
+

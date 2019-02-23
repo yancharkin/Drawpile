@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2017 Calle Laakkonen
+   Copyright (C) 2017-2018 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -75,19 +75,21 @@ public:
 
 	QString idAlias() const override { return m_alias; }
 	QString founderName() const override { return m_founder; }
-	protocol::ProtocolVersion protocolVersion() const { return m_version; }
+	protocol::ProtocolVersion protocolVersion() const override { return m_version; }
 	QByteArray passwordHash() const override { return m_password; }
 	QByteArray opwordHash() const override { return m_opword; }
 	int maxUsers() const override { return m_maxUsers; }
 	QString title() const override { return m_title; }
+	uint autoResetThreshold() const override { return m_autoResetThreshold; }
 	Flags flags() const override { return m_flags; }
 
-	QDateTime startTime() const;
-	void setPassword(const QString &password) override;
-	void setOpword(const QString &opword) override;
+	QDateTime startTime() const override;
+	void setPasswordHash(const QByteArray &password) override;
+	void setOpwordHash(const QByteArray &opword) override;
 	void setMaxUsers(int max) override;
 	void setTitle(const QString &title) override;
 	void setFlags(Flags f) override;
+	void setAutoResetThreshold(uint limit) override;
 	void joinUser(uint8_t id, const QString &name) override;
 
 	void terminate() override;
@@ -99,14 +101,18 @@ public:
 	QStringList announcements() const override { return m_announcements; }
 
 	void setAuthenticatedOperator(const QString &username, bool op) override;
+	void setAuthenticatedTrust(const QString &username, bool trusted) override;
 	bool isOperator(const QString &username) const override { return m_ops.contains(username); }
+	bool isTrusted(const QString &username) const override { return m_trusted.contains(username); }
 	bool isAuthenticatedOperators() const override { return !m_ops.isEmpty(); }
 
 protected:
 	void historyAdd(const protocol::MessagePtr &msg) override;
 	void historyReset(const QList<protocol::MessagePtr> &newHistory) override;
-	void historyAddBan(int id, const QString &username, const QHostAddress &ip, const QString &bannedBy);
-	void historyRemoveBan(int id);
+	void historyAddBan(int id, const QString &username, const QHostAddress &ip, const QString &extAuthId, const QString &bannedBy) override;
+	void historyRemoveBan(int id) override;
+
+	void timerEvent(QTimerEvent *event) override;
 
 private:
 	FiledHistory(const QDir &dir, QFile *journal, const QUuid &id, const QString &alias, const protocol::ProtocolVersion &version, const QString &founder, QObject *parent);
@@ -137,9 +143,11 @@ private:
 	QByteArray m_password;
 	QByteArray m_opword;
 	int m_maxUsers;
+	uint m_autoResetThreshold;
 	Flags m_flags;
 	QStringList m_announcements;
 	QSet<QString> m_ops;
+	QSet<QString> m_trusted;
 
 	QVector<Block> m_blocks;
 	bool m_archive;

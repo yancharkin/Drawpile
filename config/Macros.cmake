@@ -8,6 +8,8 @@ macro ( strip_exe target )
 	if ( STRIP_CMD )
 		if ( WIN32 )
 			set ( target_file "${target}.exe" )
+		elseif ( APPLE )
+			set ( target_file "${target}.app/Contents/MacOS/${target}" )
 		else ( )
 			set ( target_file "${target}" )
 		endif ( )
@@ -15,7 +17,7 @@ macro ( strip_exe target )
 		add_custom_command(
 			TARGET ${target}
 			POST_BUILD
-			COMMAND ${STRIP_CMD} -s "${EXECUTABLE_OUTPUT_PATH}/${target_file}"
+			COMMAND ${STRIP_CMD} "${EXECUTABLE_OUTPUT_PATH}/${target_file}"
 		)
 	endif ( )
 endmacro ( )
@@ -92,14 +94,11 @@ macro ( generate_win32_resource resfile FULLNAME INTERNALNAME DESCRIPTION COMMEN
 		
 		set ( ${resfile} "${CMAKE_CURRENT_BINARY_DIR}/win32resource.obj" )
 		
-		if ("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
-			add_custom_command(
-				OUTPUT ${${resfile}}
-				COMMAND windres ${win32RC} ${${resfile}}
-				DEPENDS ${win32RC}
-			)
-		# TODO use resource compiler when using MSVC
-		endif ()
+		add_custom_command(
+			OUTPUT ${${resfile}}
+			COMMAND ${CMAKE_RC_COMPILER} ${win32RC} ${${resfile}}
+			DEPENDS ${win32RC}
+		)
 
 	endif ( )
 endmacro ( )

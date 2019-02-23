@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2014-2017 Calle Laakkonen
+   Copyright (C) 2014-2019 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -26,16 +26,24 @@
 #include "templateloader.h"
 
 #include "../net/control.h"
+#include "../util/authtoken.h"
+#include "../util/networkaccess.h"
 
 #include "config.h"
 
 #include <QStringList>
 #include <QRegularExpression>
+#include <QNetworkRequest>
+#include <QNetworkReply>
+
+#ifndef Q_FALLTHROUGH // not present in Qt 5.6
+#define Q_FALLTHROUGH() (void)0
+#endif
 
 namespace server {
 
 LoginHandler::LoginHandler(Client *client, SessionServer *server) :
-	QObject(client), m_client(client), m_server(server), m_hostPrivilege(false), m_complete(false)
+	QObject(client), m_client(client), m_server(server), m_extauth_nonce(0), m_hostPrivilege(false), m_complete(false)
 {
 	connect(client, &Client::loginMessage, this, &LoginHandler::handleLoginMessage);
 	connect(server, &SessionServer::sessionChanged, this, &LoginHandler::announceSession);
@@ -65,6 +73,10 @@ void LoginHandler::startLoginProcess()
 	}
 	if(!m_server->config()->getConfigBool(config::AllowGuests))
 		flags << "NOGUEST";
+	if(m_server->config()->internalConfig().reportUrl.isValid())
+		flags << "REPORT";
+	if(m_server->config()->getConfigBool(config::AllowCustomAvatars))
+		flags << "AVATAR";
 
 	greeting.reply["flags"] = flags;
 
@@ -80,7 +92,6 @@ void LoginHandler::announceServerInfo()
 	greeting.type = protocol::ServerReply::LOGIN;
 	greeting.message = "Welcome";
 	greeting.reply["title"] = m_server->config()->getConfigString(config::ServerTitle);
-	// TODO if message length exceeds maximum, split session list into multiple messages
 	QJsonArray sessions = m_server->sessionDescriptions();
 	if(m_server->templateLoader()) {
 		// Add session templates to list, if not shadowed by live sessions
@@ -99,7 +110,27 @@ void LoginHandler::announceServerInfo()
 	}
 	greeting.reply["sessions"] = sessions;
 
-	send(greeting);
+	if(!send(greeting)) {
+		// Reply was too long to fit in the message envelope!
+		// Split the reply into separte announcements and send it in pieces
+		protocol::ServerReply piece;
+		piece.type = greeting.type;
+		piece.message = greeting.message;
+		piece.reply["title"] = greeting.reply["title"];
+
+		if(!greeting.reply["title"].toString().isEmpty()) {
+			send(piece);
+		}
+
+		for(const QJsonValue &session : sessions) {
+			QJsonArray a;
+			a << session;
+			piece.reply["sessions"] = a;
+			send(piece);
+			// Include the title as part of the first message, but not the later ones
+			piece.reply.remove("title");
+		}
+	}
 }
 
 void LoginHandler::announceSession(const QJsonObject &session)
@@ -169,6 +200,8 @@ void LoginHandler::handleLoginMessage(protocol::MessagePtr msg)
 			handleHostMessage(cmd);
 		} else if(cmd.cmd == "join") {
 			handleJoinMessage(cmd);
+		} else if(cmd.cmd == "report") {
+			handleAbuseReport(cmd);
 		} else {
 			m_client->log(Log().about(Log::Level::Error, Log::Topic::RuleBreak).message("Invalid login command (while waiting for join/host): " + cmd.cmd));
 			m_client->disconnectError("invalid message");
@@ -178,15 +211,13 @@ void LoginHandler::handleLoginMessage(protocol::MessagePtr msg)
 
 void LoginHandler::handleIdentMessage(const protocol::ServerCommand &cmd)
 {
-	QString username, password;
 	if(cmd.args.size()!=1 && cmd.args.size()!=2) {
 		sendError("syntax", "Expected username and (optional) password");
 		return;
 	}
 
-	username = cmd.args[0].toString();
-	if(cmd.args.size()>1)
-		password = cmd.args[1].toString();
+	const QString username = cmd.args[0].toString();
+	const QString password = cmd.args.size()>1 ? cmd.args[1].toString() : QString();
 
 	if(!validateUsername(username)) {
 		sendError("badUsername", "Invalid username");
@@ -195,14 +226,87 @@ void LoginHandler::handleIdentMessage(const protocol::ServerCommand &cmd)
 
 	const RegisteredUser userAccount = m_server->config()->getUserAccount(username, password);
 
-	switch(userAccount.status) {
-	case RegisteredUser::NotFound:
-		if(m_server->config()->getConfigBool(config::AllowGuests)) {
-			guestLogin(username);
-			return;
-		}
-		// fall through to badpass if guest logins are disabled
+	if(userAccount.status != RegisteredUser::NotFound && cmd.kwargs.contains("extauth")) {
+		// This should never happen. If it does, it means there's a bug in the client
+		// or someone is probing for bugs in the server.
+		sendError("extAuthError", "Cannot use extauth with an internal user account!");
+		return;
+	}
 
+	if(cmd.kwargs.contains("avatar") && m_server->config()->getConfigBool(config::AllowCustomAvatars)) {
+		// TODO validate
+		m_client->setAvatar(QByteArray::fromBase64(cmd.kwargs["avatar"].toString().toUtf8()));
+	}
+
+	switch(userAccount.status) {
+	case RegisteredUser::NotFound: {
+		// Account not found in internal user list. Allow guest login (if enabled)
+		// or require external authentication
+		const bool allowGuests = m_server->config()->getConfigBool(config::AllowGuests);
+		const bool useExtAuth = m_server->config()->internalConfig().extAuthUrl.isValid() && m_server->config()->getConfigBool(config::UseExtAuth);
+
+		if(useExtAuth) {
+#ifdef HAVE_LIBSODIUM
+			if(cmd.kwargs.contains("extauth")) {
+				// An external authentication token was provided
+				if(m_extauth_nonce == 0) {
+					sendError("extAuthError", "Ext auth not requested!");
+					return;
+				}
+				const AuthToken extAuthToken(cmd.kwargs["extauth"].toString().toUtf8());
+				const QByteArray key = QByteArray::fromBase64(m_server->config()->getConfigString(config::ExtAuthKey).toUtf8());
+				if(!extAuthToken.checkSignature(key)) {
+					sendError("extAuthError", "Ext auth token signature mismatch!");
+					return;
+				}
+				if(!extAuthToken.validatePayload(m_server->config()->getConfigString(config::ExtAuthGroup), m_extauth_nonce)) {
+					sendError("extAuthError", "Ext auth token is invalid!");
+					return;
+				}
+
+				// Token is valid: log in as an authenticated user
+				const QJsonObject ea = extAuthToken.payload();
+				const QJsonValue uid = ea["uid"];
+
+				QByteArray avatar;
+				if(m_server->config()->getConfigBool(config::ExtAuthAvatars))
+					avatar = extAuthToken.avatar();
+
+				authLoginOk(
+					ea["username"].toString(),
+					uid.isDouble() ? QString::number(uid.toInt()) : uid.toString(),
+					ea["flags"].toArray(),
+					avatar,
+					m_server->config()->getConfigBool(config::ExtAuthMod)
+					);
+
+			} else {
+				// No ext-auth token provided: request it now
+
+				// If both guest logins and ExtAuth is enabled, we must query the auth server first
+				// to determine if guest login is possible for this user.
+				// If guest logins are not enabled, we always just request ext-auth
+				if(allowGuests)
+					extAuthGuestLogin(username);
+				else
+					requestExtAuth();
+			}
+
+#else
+			// This should never be reached
+			sendError("extAuthError", "Server misconfiguration: ext-auth support not compiled in.");
+#endif
+			return;
+
+		} else {
+			// ExtAuth not enabled: permit guest login if enabled
+			if(allowGuests) {
+				guestLogin(username);
+				return;
+			}
+		}
+		Q_FALLTHROUGH(); // fall through to badpass if guest logins are disabled
+		}
 	case RegisteredUser::BadPass:
 		if(password.isEmpty()) {
 			// No password: tell client that guest login is not possible (for this username)
@@ -223,27 +327,133 @@ void LoginHandler::handleIdentMessage(const protocol::ServerCommand &cmd)
 		sendError("bannedName", "This username is banned");
 		return;
 
-	case RegisteredUser::Ok: {
+	case RegisteredUser::Ok:
 		// Yay, username and password were valid!
-		m_client->setUsername(username);
-
-		protocol::ServerReply identReply;
-		identReply.type = protocol::ServerReply::RESULT;
-		identReply.message = "Authenticated login OK!";
-		identReply.reply["state"] = "identOk";
-		identReply.reply["flags"] = QJsonArray::fromStringList(userAccount.flags);
-		identReply.reply["ident"] = m_client->username();
-		identReply.reply["guest"] = false;
-
-		m_client->setAuthenticated(true);
-		m_client->setModerator(userAccount.flags.contains("MOD"));
-		m_hostPrivilege = userAccount.flags.contains("HOST");
-		m_state = WAIT_FOR_LOGIN;
-
-		send(identReply);
-		announceServerInfo();
-		break; }
+		authLoginOk(username, QString(), QJsonArray::fromStringList(userAccount.flags), QByteArray(), true);
+		break;
 	}
+}
+
+void LoginHandler::authLoginOk(const QString &username, const QString &extAuthId, const QJsonArray &flags, const QByteArray &avatar, bool allowMod)
+{
+	m_client->setUsername(username);
+	m_client->setExtAuthId(extAuthId);
+
+	protocol::ServerReply identReply;
+	identReply.type = protocol::ServerReply::RESULT;
+	identReply.message = "Authenticated login OK!";
+	identReply.reply["state"] = "identOk";
+	identReply.reply["flags"] = flags;
+	identReply.reply["ident"] = m_client->username();
+	identReply.reply["guest"] = false;
+
+	m_client->setAuthenticated(true);
+	m_client->setModerator(flags.contains("MOD") && allowMod);
+	if(!avatar.isEmpty())
+		m_client->setAvatar(avatar);
+	m_hostPrivilege = flags.contains("HOST");
+	m_state = WAIT_FOR_LOGIN;
+
+	send(identReply);
+	announceServerInfo();
+
+}
+
+/**
+ * @brief Make a request to the ext-auth server and check if guest login is possible for the given username
+ *
+ * If guest login is possible, do that.
+ * Otherwise request external authentication.
+ *
+ * If the authserver cannot be reached, guest login is permitted (fallback mode) or
+ * not.
+ * @param username
+ */
+void LoginHandler::extAuthGuestLogin(const QString &username)
+{
+	QNetworkRequest req(m_server->config()->internalConfig().extAuthUrl);
+	req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+
+	QJsonObject o;
+	o["username"] = username;
+	const QString authGroup = m_server->config()->getConfigString(config::ExtAuthGroup);
+	if(!authGroup.isEmpty())
+		o["group"] = authGroup;
+
+	m_client->log(Log().about(Log::Level::Info, Log::Topic::Status).message(QStringLiteral("Querying auth server for %1...").arg(username)));
+	QNetworkReply *reply = networkaccess::getInstance()->post(req, QJsonDocument(o).toJson());
+	connect(reply, &QNetworkReply::finished, this, [reply, username, this]() {
+		reply->deleteLater();
+
+		if(m_state != WAIT_FOR_IDENT) {
+			sendError("extauth", "Received auth serveer reply in unexpected state");
+			return;
+		}
+
+		bool fail = false;
+		if(reply->error() != QNetworkReply::NoError) {
+			fail = true;
+			m_client->log(Log().about(Log::Level::Warn, Log::Topic::Status).message("Auth server error: " + reply->errorString()));
+		}
+
+		QJsonDocument doc;
+		if(!fail) {
+			QJsonParseError error;
+			doc = QJsonDocument::fromJson(reply->readAll(), &error);
+			if(error.error != QJsonParseError::NoError) {
+				fail = true;
+				m_client->log(Log().about(Log::Level::Warn, Log::Topic::Status).message("Auth server JSON parse error: " + error.errorString()));
+			}
+		}
+
+		if(fail) {
+			if(m_server->config()->getConfigBool(config::ExtAuthFallback)) {
+				// Fall back to guest logins
+				guestLogin(username);
+			} else {
+				// If fallback mode is disabled, deny all non-internal logins
+				sendError("noExtAuth", "Authentication server is unavailable!");
+			}
+			return;
+
+		}
+
+		const QJsonObject obj = doc.object();
+		const QString status = obj["status"].toString();
+		if(status == "auth") {
+			requestExtAuth();
+
+		} else if(status == "guest") {
+			guestLogin(username);
+
+		} else if(status == "outgroup") {
+			sendError("extauthOutgroup", "This username cannot log in to this server");
+
+		} else {
+			sendError("extauth", "Unexpected ext-auth response: " + status);
+		}
+	});
+}
+
+void LoginHandler::requestExtAuth()
+{
+#ifdef HAVE_LIBSODIUM
+	Q_ASSERT(m_extauth_nonce == 0);
+	m_extauth_nonce = AuthToken::generateNonce();
+
+	protocol::ServerReply identReply;
+	identReply.type = protocol::ServerReply::RESULT;
+	identReply.message = "External authentication needed";
+	identReply.reply["state"] = "needExtAuth";
+	identReply.reply["extauthurl"] = m_server->config()->internalConfig().extAuthUrl.toString();
+	identReply.reply["nonce"] = QString::number(m_extauth_nonce, 16);
+	identReply.reply["group"] = m_server->config()->getConfigString(config::ExtAuthGroup);
+	identReply.reply["avatar"] = m_client->avatar().isEmpty() && m_server->config()->getConfigBool(config::ExtAuthAvatars);
+
+	send(identReply);
+#else
+	qFatal("Bug: requestExtAuth() called, even though libsodium is not compiled in!");
+#endif
 }
 
 void LoginHandler::guestLogin(const QString &username)
@@ -276,9 +486,9 @@ bool LoginHandler::validateSessionIdAlias(const QString &alias)
 	for(int i=0;i<alias.length();++i) {
 		const QChar c = alias.at(i);
 		if(!(
-			(c >= 'a' && c<'z') ||
-			(c >= 'A' && c<'Z') ||
-			(c >= '0' && c<'9') ||
+			(c >= 'a' && c<='z') ||
+			(c >= 'A' && c<='Z') ||
+			(c >= '0' && c<='9') ||
 			c=='-'
 			))
 			return false;
@@ -390,12 +600,16 @@ void LoginHandler::handleJoinMessage(const protocol::ServerCommand &cmd)
 
 	if(!m_client->isModerator()) {
 		// Non-moderators have to obey access restrictions
-		if(session->banlist().isBanned(m_client->peerAddress())) {
+		if(session->banlist().isBanned(m_client->peerAddress(), m_client->extAuthId())) {
 			sendError("banned", "You have been banned from this session");
 			return;
 		}
 		if(session->isClosed()) {
 			sendError("closed", "This session is closed");
+			return;
+		}
+		if(session->isAuthOnly() && !m_client->isAuthenticated()) {
+			sendError("authOnly", "This session does not allow guest logins");
 			return;
 		}
 
@@ -437,6 +651,14 @@ void LoginHandler::handleJoinMessage(const protocol::ServerCommand &cmd)
 	deleteLater();
 }
 
+void LoginHandler::handleAbuseReport(const protocol::ServerCommand &cmd)
+{
+	Session *s = m_server->getSessionById(cmd.kwargs["session"].toString());
+	if(s) {
+		s->sendAbuseReport(m_client, 0, cmd.kwargs["reason"].toString());
+	}
+}
+
 void LoginHandler::handleStarttls()
 {
 	if(!m_client->hasSslSupport()) {
@@ -460,10 +682,17 @@ void LoginHandler::handleStarttls()
 	m_state = WAIT_FOR_IDENT;
 }
 
-void LoginHandler::send(const protocol::ServerReply &cmd)
+bool LoginHandler::send(const protocol::ServerReply &cmd)
 {
-	if(!m_complete)
-		m_client->sendDirectMessage(protocol::MessagePtr(new protocol::Command(0, cmd)));
+	if(!m_complete) {
+		protocol::MessagePtr msg(new protocol::Command(0, cmd));
+		if(msg.cast<protocol::Command>().isOversize()) {
+			qWarning("Oversize login message %s", qPrintable(cmd.message));
+			return false;
+		}
+		m_client->sendDirectMessage(msg);
+	}
+	return true;
 }
 
 void LoginHandler::sendError(const QString &code, const QString &message)

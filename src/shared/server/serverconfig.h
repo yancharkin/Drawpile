@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2016-2017 Calle Laakkonen
+   Copyright (C) 2016-2019 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -23,6 +23,7 @@
 #include <QObject>
 #include <QString>
 #include <QHash>
+#include <QUrl>
 
 class QHostAddress;
 
@@ -53,7 +54,7 @@ public:
 namespace config {
 	static const ConfigKey
 		ClientTimeout(0, "clientTimeout", "60", ConfigKey::TIME),            // Connection ping timeout for clients
-		SessionSizeLimit(1, "sessionSizeLimit", "15mb", ConfigKey::SIZE),    // Session history size limit in bytes (int)
+		SessionSizeLimit(1, "sessionSizeLimit", "99mb", ConfigKey::SIZE),    // Session history size limit in bytes
 		SessionCountLimit(2, "sessionCountLimit", "25", ConfigKey::INT),     // Maximum number of active sessions (int)
 		EnablePersistence(3, "persistence", "false", ConfigKey::BOOL),       // Enable session persistence (bool)
 		AllowGuestHosts(4, "allowGuestHosts", "true", ConfigKey::BOOL),      // Allow guests (or users without the HOST flag) to host sessions
@@ -64,9 +65,33 @@ namespace config {
 		PrivateUserList(9, "privateUserList", "false", ConfigKey::BOOL),     // Don't include user list in announcement
 		AllowGuests(10, "allowGuests", "true", ConfigKey::BOOL),             // Allow unauthenticated users
 		ArchiveMode(11, "archive", "false", ConfigKey::BOOL),                // Don't delete terminated session files
-		LocalAddress(12, "localAddress", "", ConfigKey::STRING)              // Server local address (used for session announcements)
+		UseExtAuth(12, "extauth", "false", ConfigKey::BOOL),                 // Enable external authentication
+		ExtAuthKey(13, "extauthkey", "", ConfigKey::STRING),                 // ExtAuth signature verification key
+		ExtAuthGroup(14, "extauthgroup", "", ConfigKey::STRING),             // ExtAuth user group (leave blank for default set)
+		ExtAuthFallback(15, "extauthfallback", "true", ConfigKey::BOOL),     // Fall back to guest logins if ext auth server is unreachable
+		ExtAuthMod(16, "extauthmod", "true", ConfigKey::BOOL),               // Respect ext-auth user's "MOD" flag
+		ReportToken(17, "reporttoken", "", ConfigKey::STRING),               // Abuse report backend server authorization token
+		LogPurgeDays(18, "logpurgedays", "0", ConfigKey::INT),               // Automatically purge log entries older than this many days (DB log only)
+		AutoresetThreshold(19, "autoResetThreshold", "15mb", ConfigKey::SIZE), // Default autoreset threshold in bytes
+		AllowCustomAvatars(20, "customAvatars", "true", ConfigKey::BOOL),      // Allow users to set a custom avatar when logging in
+		ExtAuthAvatars(21, "extAuthAvatars", "true", ConfigKey::BOOL)          // Use avatars received from ext-auth server (unless a custom avatar has been set)
 		;
 }
+
+//! Settings that are not adjustable after the server has started
+struct InternalConfig {
+	QString localHostname; // Hostname of this server to use in session announcements
+	int realPort;          // The port the server is listening on
+	int announcePort;      // The port to use in session announcements
+	QUrl extAuthUrl;       // URL of the external authentication server
+	QUrl reportUrl;        // Abuse report handler backend URL
+
+	int getAnnouncePort() const { return announcePort > 0 ? announcePort : realPort; }
+
+	InternalConfig()
+		: realPort(27750), announcePort(0)
+	{ }
+};
 
 struct RegisteredUser {
 	enum Status {
@@ -93,6 +118,9 @@ class ServerConfig : public QObject
 	Q_OBJECT
 public:
 	explicit ServerConfig(QObject *parent=nullptr) : QObject(parent) {}
+
+	void setInternalConfig(const InternalConfig &cfg) { m_internalCfg = cfg; }
+	const InternalConfig &internalConfig() const { return m_internalCfg; }
 
 	// Get configuration values
 	QString getConfigString(ConfigKey key) const;
@@ -167,6 +195,9 @@ protected:
 	 */
 	virtual QString getConfigValue(const ConfigKey key, bool &found) const = 0;
 	virtual void setConfigValue(const ConfigKey key, const QString &value) = 0;
+
+private:
+	InternalConfig m_internalCfg;
 };
 
 }

@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2014-2016 Calle Laakkonen
+   Copyright (C) 2014-2017 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -28,20 +28,24 @@ class FloodFill : public Tool
 public:
 	FloodFill(ToolController &owner);
 
-	void begin(const paintcore::Point& point, float zoom);
-	void motion(const paintcore::Point& point, bool constrain, bool center);
-	void end();
+	void begin(const paintcore::Point& point, bool right, float zoom) override;
+	void motion(const paintcore::Point& point, bool constrain, bool center) override;
+	void end() override;
 
 	void setTolerance(int tolerance) { m_tolerance = tolerance; }
 	void setExpansion(int expansion) { m_expansion = expansion; }
+	void setSizeLimit(unsigned int limit) { m_sizelimit = qMax(100u, limit); }
 	void setSampleMerged(bool sm) { m_sampleMerged = sm; }
 	void setUnderFill(bool uf) { m_underFill = uf; }
+	void setEraseMode(bool erase) { m_eraseMode = erase; }
 
 private:
 	int m_tolerance;
 	int m_expansion;
+	unsigned int m_sizelimit;
 	bool m_sampleMerged;
 	bool m_underFill;
+	bool m_eraseMode;
 };
 
 }

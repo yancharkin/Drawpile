@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2006-2017 Calle Laakkonen
+   Copyright (C) 2006-2018 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -24,10 +24,23 @@
 
 #include "utils/icon.h"
 #include "utils/settings.h"
+#include "utils/logging.h"
 #include "notifications.h"
 
 #ifdef Q_OS_MAC
 #include "widgets/macmenu.h"
+#endif
+
+#ifdef KIS_TABLET
+
+#if defined(Q_OS_WIN)
+#include "bundled/kis_tablet/kis_tablet_support_win8.h"
+#include "bundled/kis_tablet/kis_tablet_support_win.h"
+#else
+#include "bundled/kis_tablet/kis_xi2_event_filter.h"
+#include <QX11Info>
+#endif
+
 #endif
 
 #include <QSettings>
@@ -88,7 +101,17 @@ bool DrawpileApp::event(QEvent *e) {
 		openUrl(fe->url());
 
 		return true;
+
 	}
+#ifdef Q_OS_MACOS
+	else if(e->type() == QEvent::ApplicationStateChange) {
+		QApplicationStateChangeEvent *ae = static_cast<QApplicationStateChangeEvent*>(e);
+		if(ae->applicationState() == Qt::ApplicationActive && topLevelWindows().isEmpty()) {
+			// Open a new window when application is activated and there are no windows.
+			openBlankDocument();
+		}
+	}
+#endif
 
 	return QApplication::event(e);
 }
@@ -190,6 +213,8 @@ int main(int argc, char *argv[]) {
 	// Initialize application
 	DrawpileApp app(argc,argv);
 
+	utils::initLogging();
+
 	icon::selectThemeVariant();
 
 #ifdef Q_OS_MAC
@@ -199,6 +224,46 @@ int main(int argc, char *argv[]) {
 
 	// Global menu bar that is shown when no windows are open
 	MacMenu::instance();
+#endif
+
+#ifdef KIS_TABLET
+#ifdef Q_OS_WIN
+	{
+		bool useWindowsInk = false;
+		// Enable Windows Ink tablet event handler
+		// This was taken directly from Krita
+		if(QSettings().value("settings/input/windowsink", true).toBool()) {
+			KisTabletSupportWin8 *penFilter = new KisTabletSupportWin8();
+			if (penFilter->init()) {
+				app.installNativeEventFilter(penFilter);
+				useWindowsInk = true;
+				qDebug("Using Win8 Pointer Input for tablet support");
+
+			} else {
+				qWarning("No Win8 Pointer Input available");
+				delete penFilter;
+			}
+		} else {
+			qDebug("Win8 Pointer Input disabled");
+		}
+
+		if(!useWindowsInk) {
+			// Enable modified Wintab support
+			// This too was taken from Krita
+			qDebug("Enabling custom Wintab support");
+			KisTabletSupportWin::init();
+		}
+	}
+#else
+	if(QX11Info::isPlatformX11()) {
+		// Qt's X11 tablet event handling is broken in different ways
+		// in pretty much every Qt5 version, so we use this Krita's
+		// modified event filter
+		qInfo("Enabling custom XInput2 tablet event filter");
+		app.installNativeEventFilter(kis_tablet::KisXi2EventFilter::instance());
+	}
+#endif
+
 #endif
 
 	qsrand(QDateTime::currentMSecsSinceEpoch());

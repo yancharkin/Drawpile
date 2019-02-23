@@ -33,11 +33,34 @@ namespace tools {
 class ToolProperties
 {
 public:
-	ToolProperties() : m_tool(-1) { }
-	ToolProperties(int tool) : m_tool(tool) { }
+	ToolProperties() { }
+	ToolProperties(const QString &type)
+		: m_type(type) { }
 
-	//! Get the type of the tool
-	int toolType() const { return m_tool; }
+	struct IntValue {
+		QString key;
+		int defaultValue;
+		int min;
+		int max;
+	};
+
+	struct BoolValue {
+		QString key;
+		bool defaultValue;
+	};
+
+	struct VariantValue {
+		QString key;
+		QVariant defaultValue;
+	};
+
+	/**
+	 * @brief Get the type of the tool
+	 *
+	 * E.g. Freehand and Line tools are both "brush" type tools,
+	 * as they share their settings.
+	 */
+	QString toolType() const { return m_type; }
 
 	/**
 	 * @brief Set a value
@@ -45,6 +68,7 @@ public:
 	 * @param value
 	 */
 	void setValue(const QString &key, const QVariant &value);
+	template<typename ValueType> void setValue(const ValueType &key, const QVariant &value) { setValue(key.key, value); }
 
 	/**
 	 * @brief Get a value
@@ -53,6 +77,7 @@ public:
 	 * @return
 	 */
 	QVariant value(const QString &key, const QVariant &defaultValue=QVariant()) const;
+	QVariant value(const VariantValue &key) const { return value(key.key, key.defaultValue); }
 
 	/**
 	 * @brief Get an integer value within the given bounds
@@ -62,6 +87,7 @@ public:
 	 * @return
 	 */
 	int intValue(const QString &key, int defaultValue, int min=0, int max=9999) const;
+	int intValue(const IntValue &key) const { return intValue(key.key, key.defaultValue, key.min, key.max); }
 
 	/**
 	 * @brief Get a boolean value
@@ -70,6 +96,10 @@ public:
 	 * @return
 	 */
 	bool boolValue(const QString &key, bool defaultValue) const;
+	bool boolValue(const BoolValue &key) const { return boolValue(key.key, key.defaultValue); }
+
+	//! Are there any stored properties?
+	bool isEmpty() const { return m_props.isEmpty(); }
 
 	/**
 	 * @brief Save tool properties
@@ -88,11 +118,22 @@ public:
 	 */
 	static ToolProperties load(const QSettings &cfg);
 
+	QVariantHash asVariant() const { return m_props; }
+
+	static ToolProperties fromVariant(const QVariantHash &h, const QString &type=QString())
+	{
+		ToolProperties tp(type);
+		tp.m_props = h;
+		return tp;
+	}
+
 private:
 	QVariantHash m_props;
-	int m_tool;
+	QString m_type;
 };
 
 }
+
+Q_DECLARE_METATYPE(tools::ToolProperties)
 
 #endif

@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2017 Calle Laakkonen
+   Copyright (C) 2017-2019 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -27,6 +27,7 @@
 #include <QJsonObject>
 #include <QVarLengthArray>
 #include <QDebug>
+#include <QTimerEvent>
 
 namespace server {
 
@@ -46,17 +47,14 @@ FiledHistory::FiledHistory(const QDir &dir, QFile *journal, const QUuid &id, con
 	  m_archive(false)
 {
 	Q_ASSERT(journal);
+
+	// Flush the recording file periodically
+	startTimer(1000 * 30, Qt::VeryCoarseTimer);
 }
 
 FiledHistory::FiledHistory(const QDir &dir, QFile *journal, const QUuid &id, QObject *parent)
-	: SessionHistory(id, parent),
-	  m_dir(dir),
-	  m_journal(journal),
-	  m_recording(nullptr),
-	  m_maxUsers(0),
-	  m_flags(0)
+	: FiledHistory(dir, journal, id, QString(), protocol::ProtocolVersion(), QString(), parent)
 {
-	Q_ASSERT(journal);
 }
 
 FiledHistory::~FiledHistory()
@@ -138,6 +136,7 @@ bool FiledHistory::create()
 	if(!m_alias.isEmpty())
 		m_journal->write(QString("ALIAS %1\n").arg(m_alias).toUtf8());
 	m_journal->write(QString("FOUNDER %1\n").arg(m_founder).toUtf8());
+	m_journal->flush();
 
 	return true;
 }
@@ -222,6 +221,9 @@ bool FiledHistory::load()
 		} else if(cmd == "MAXUSERS") {
 			m_maxUsers = qBound(1, params.toInt(), 254);
 
+		} else if(cmd == "AUTORESET") {
+			m_autoResetThreshold = params.toUInt();
+
 		} else if(cmd == "TITLE") {
 			m_title = params;
 
@@ -234,6 +236,8 @@ bool FiledHistory::load()
 					flags |= PreserveChat;
 				else if(f == "nsfm")
 					flags |= Nsfm;
+				else if(f == "deputies")
+					flags |= Deputies;
 				else
 					qWarning() << id().toString() << "unknown flag:" << QString::fromUtf8(f);
 			}
@@ -241,14 +245,15 @@ bool FiledHistory::load()
 
 		} else if(cmd == "BAN") {
 			const QList<QByteArray> args = params.split(' ');
-			if(args.length() != 4) {
+			if(args.length() != 5) {
 				qWarning() << id().toString() << "invalid ban entry:" << QString::fromUtf8(params);
 			} else {
 				int id = args.at(0).toInt();
 				QString name { QString::fromUtf8(QByteArray::fromPercentEncoding(args.at(1))) };
 				QHostAddress ip { QString::fromUtf8(args.at(2)) };
-				QString bannedBy { QString::fromUtf8(QByteArray::fromPercentEncoding(args.at(3))) };
-				m_banlist.addBan(name, ip, bannedBy, id);
+				QString extAuthId { QString::fromUtf8(QByteArray::fromPercentEncoding(args.at(3))) };
+				QString bannedBy { QString::fromUtf8(QByteArray::fromPercentEncoding(args.at(4))) };
+				m_banlist.addBan(name, ip, extAuthId, bannedBy, id);
 			}
 
 		} else if(cmd == "UNBAN") {
@@ -276,6 +281,12 @@ bool FiledHistory::load()
 
 		} else if(cmd == "DEOP") {
 			m_ops.remove(QString::fromUtf8(params));
+
+		} else if(cmd == "TRUST") {
+			m_trusted.insert(QString::fromUtf8(params));
+
+		} else if(cmd == "UNTRUST") {
+			m_trusted.remove(QString::fromUtf8(params));
 
 		} else {
 			qWarning() << id().toString() << "unknown journal entry:" << QString::fromUtf8(cmd);
@@ -313,7 +324,7 @@ bool FiledHistory::load()
 		return false;
 	}
 
-	if(m_version.server() != protocol::ProtocolVersion::current().server()) {
+	if(m_version.serverVersion() != protocol::ProtocolVersion::current().serverVersion()) {
 		qWarning() << recordingFile << "incompatible server version";
 		return false;
 	}
@@ -327,6 +338,14 @@ bool FiledHistory::load()
 	}
 
 	historyLoaded(m_blocks.last().endOffset-startOffset, m_blocks.last().startIndex+m_blocks.last().count);
+
+	// If a loaded session is empty, the server expects the first joining client
+	// to supply the initial content, while the client is expecting to join
+	// an existing session.
+	if(sizeInBytes() == 0) {
+		qWarning() << recordingFile << "empty session!";
+		return false;
+	}
 
 	return true;
 }
@@ -430,24 +449,28 @@ void FiledHistory::closeBlock()
 	};
 }
 
-void FiledHistory::setPassword(const QString &password)
+void FiledHistory::setPasswordHash(const QByteArray &password)
 {
-	m_password = passwordhash::hash(password);
+	if(m_password != password) {
+		m_password = password;
 
-	m_journal->write("PASSWORD ");
-	if(!m_password.isEmpty())
-		m_journal->write(m_password);
-	m_journal->write("\n");
+		m_journal->write("PASSWORD ");
+		if(!m_password.isEmpty())
+			m_journal->write(m_password);
+		m_journal->write("\n");
+		m_journal->flush();
+	}
 }
 
-void FiledHistory::setOpword(const QString &opword)
+void FiledHistory::setOpwordHash(const QByteArray &opword)
 {
-	m_opword = passwordhash::hash(opword);
+	m_opword = opword;
 
 	m_journal->write("OPWORD ");
 	if(!m_opword.isEmpty())
 		m_journal->write(m_opword);
 	m_journal->write("\n");
+	m_journal->flush();
 }
 
 QDateTime FiledHistory::startTime() const
@@ -457,10 +480,21 @@ QDateTime FiledHistory::startTime() const
 
 void FiledHistory::setMaxUsers(int max)
 {
-	int newMax = qBound(1, max, 254);
+	const int newMax = qBound(1, max, 254);
 	if(newMax != m_maxUsers) {
 		m_maxUsers = newMax;
 		m_journal->write(QString("MAXUSERS %1\n").arg(newMax).toUtf8());
+		m_journal->flush();
+	}
+}
+
+void FiledHistory::setAutoResetThreshold(uint limit)
+{
+	const uint newLimit = sizeLimit() == 0 ? limit : qMin(uint(sizeLimit() * 0.9), limit);
+	if(newLimit != m_autoResetThreshold) {
+		m_autoResetThreshold = newLimit;
+		m_journal->write(QString("AUTORESET %1\n").arg(newLimit).toUtf8());
+		m_journal->flush();
 	}
 }
 
@@ -469,6 +503,7 @@ void FiledHistory::setTitle(const QString &title)
 	if(title != m_title) {
 		m_title = title;
 		m_journal->write(QString("TITLE %1\n").arg(title).toUtf8());
+		m_journal->flush();
 	}
 }
 
@@ -483,7 +518,10 @@ void FiledHistory::setFlags(Flags f)
 			fstr << "preserveChat";
 		if(f.testFlag(Nsfm))
 			fstr << "nsfm";
+		if(f.testFlag(Deputies))
+			fstr << "deputies";
 		m_journal->write(QString("FLAGS %1\n").arg(fstr.join(' ')).toUtf8());
+		m_journal->flush();
 	}
 }
 
@@ -496,6 +534,7 @@ void FiledHistory::joinUser(uint8_t id, const QString &name)
 		+ " "
 		+ name.toUtf8().toPercentEncoding(QByteArray(), " ")
 		+ "\n");
+	m_journal->flush();
 }
 
 std::tuple<QList<protocol::MessagePtr>, int> FiledHistory::getBatch(int after) const
@@ -526,13 +565,13 @@ std::tuple<QList<protocol::MessagePtr>, int> FiledHistory::getBatch(int after) c
 				m_recording->close();
 				break;
 			}
-			protocol::Message *msg = protocol::Message::deserialize((const uchar*)buffer.constData(), buffer.length(), false);
-			if(!msg) {
+			protocol::NullableMessageRef msg = protocol::Message::deserialize((const uchar*)buffer.constData(), buffer.length(), false);
+			if(msg.isNull()) {
 				qWarning() << m_recording->fileName() << "Invalid message in block" << i;
 				m_recording->close();
 				break;
 			}
-			const_cast<Block&>(b).messages << protocol::MessagePtr(msg);
+			const_cast<Block&>(b).messages << protocol::MessagePtr::fromNullable(msg);
 		}
 
 		m_recording->seek(prevPos);
@@ -593,20 +632,29 @@ void FiledHistory::cleanupBatches(int before)
 	}
 }
 
-void FiledHistory::historyAddBan(int id, const QString &username, const QHostAddress &ip, const QString &bannedBy)
+void FiledHistory::historyAddBan(int id, const QString &username, const QHostAddress &ip, const QString &extAuthId, const QString &bannedBy)
 {
 	const QByteArray include = " ";
 	QByteArray entry = "BAN " +
 			QByteArray::number(id) + " " +
 			username.toUtf8().toPercentEncoding(QByteArray(), include) + " " +
 			ip.toString().toUtf8() + " " +
+			extAuthId.toUtf8().toPercentEncoding(QByteArray(), include) + " " +
 			bannedBy.toUtf8().toPercentEncoding(QByteArray(), include) + "\n";
 	m_journal->write(entry);
+	m_journal->flush();
 }
 
 void FiledHistory::historyRemoveBan(int id)
 {
 	m_journal->write(QByteArray("UNBAN ") + QByteArray::number(id) + "\n");
+	m_journal->flush();
+}
+
+void FiledHistory::timerEvent(QTimerEvent *)
+{
+	if(m_recording)
+		m_recording->flush();
 }
 
 void FiledHistory::addAnnouncement(const QString &url)
@@ -614,6 +662,7 @@ void FiledHistory::addAnnouncement(const QString &url)
 	if(!m_announcements.contains(url)) {
 		m_announcements << url;
 		m_journal->write(QString("ANNOUNCE %1\n").arg(url).toUtf8());
+		m_journal->flush();
 	}
 }
 
@@ -622,6 +671,7 @@ void FiledHistory::removeAnnouncement(const QString &url)
 	if(m_announcements.contains(url)) {
 		m_announcements.removeAll(url);
 		m_journal->write(QString("UNANNOUNCE %1\n").arg(url).toUtf8());
+		m_journal->flush();
 	}
 }
 
@@ -631,11 +681,30 @@ void FiledHistory::setAuthenticatedOperator(const QString &username, bool op)
 		if(!m_ops.contains(username)) {
 			m_ops.insert(username);
 			m_journal->write(QString("OP %1\n").arg(username).toUtf8());
+			m_journal->flush();
 		}
 	} else {
 		if(m_ops.contains(username)) {
 			m_ops.remove(username);
 			m_journal->write(QString("DEOP %1\n").arg(username).toUtf8());
+			m_journal->flush();
+		}
+	}
+}
+
+void FiledHistory::setAuthenticatedTrust(const QString &username, bool trusted)
+{
+	if(trusted) {
+		if(!m_trusted.contains(username)) {
+			m_trusted.insert(username);
+			m_journal->write(QString("TRUST %1\n").arg(username).toUtf8());
+			m_journal->flush();
+		}
+	} else {
+		if(m_trusted.contains(username)) {
+			m_trusted.remove(username);
+			m_journal->write(QString("UNTRUST %1\n").arg(username).toUtf8());
+			m_journal->flush();
 		}
 	}
 }

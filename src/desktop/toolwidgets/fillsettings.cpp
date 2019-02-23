@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2006-2017 Calle Laakkonen
+   Copyright (C) 2006-2018 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -30,8 +30,23 @@ using widgets::BrushPreview;
 
 namespace tools {
 
-FillSettings::FillSettings(const QString &name, const QString &title, ToolController *ctrl)
-	: QObject(), ToolSettings(name, title, "fill-color", ctrl), _ui(nullptr)
+namespace props {
+	static const ToolProperties::IntValue
+		tolerance { QStringLiteral("tolerance"), 0, 0, 100 },
+		expand { QStringLiteral("expand"), 0, 0, 100 }
+		;
+	static const ToolProperties::VariantValue
+		sizelimit { QStringLiteral("sizelimit"), 50.0 }
+		;
+	static const ToolProperties::BoolValue
+		samplemerged { QStringLiteral("samplemerged"), true },
+		underfill { QStringLiteral("underfill"), true },
+		erasermode { QStringLiteral("erasermode"), false }
+		;
+}
+
+FillSettings::FillSettings(ToolController *ctrl, QObject *parent)
+	: ToolSettings(ctrl, parent), _ui(nullptr)
 {
 }
 
@@ -48,46 +63,64 @@ QWidget *FillSettings::createUiWidget(QWidget *parent)
 
 	connect(_ui->preview, SIGNAL(requestColorChange()), parent, SLOT(changeForegroundColor()));
 	connect(_ui->tolerance, &QSlider::valueChanged, this, &FillSettings::pushSettings);
+	connect(_ui->sizelimit, static_cast<void (QDoubleSpinBox::*)(double)>(&QDoubleSpinBox::valueChanged), this, &FillSettings::pushSettings);
 	connect(_ui->expand, &QSlider::valueChanged, this, &FillSettings::pushSettings);
 	connect(_ui->samplemerged, &QAbstractButton::toggled, this, &FillSettings::pushSettings);
 	connect(_ui->fillunder, &QAbstractButton::toggled, this, &FillSettings::pushSettings);
-
+	connect(_ui->erasermode, &QAbstractButton::toggled, this, &FillSettings::pushSettings);
+	connect(_ui->erasermode, &QAbstractButton::toggled, this, [this](bool erase) {
+			_ui->preview->setPreviewShape(erase ? BrushPreview::FloodErase : BrushPreview::FloodFill);
+			_ui->fillunder->setEnabled(!erase);
+			_ui->samplemerged->setEnabled(!erase);
+			_ui->preview->setTransparentBackground(!erase);
+	});
 	return uiwidget;
 }
 
 void FillSettings::pushSettings()
 {
+	const bool erase = _ui->erasermode->isChecked();
 	auto *tool = static_cast<FloodFill*>(controller()->getTool(Tool::FLOODFILL));
 	tool->setTolerance(_ui->tolerance->value());
 	tool->setExpansion(_ui->expand->value());
-	tool->setSampleMerged(_ui->samplemerged->isChecked());
+	tool->setSizeLimit(_ui->sizelimit->value() * _ui->sizelimit->value() * 10 * 10);
+	tool->setSampleMerged(erase ? false : _ui->samplemerged->isChecked());
 	tool->setUnderFill(_ui->fillunder->isChecked());
+	tool->setEraseMode(erase);
+}
+
+void FillSettings::toggleEraserMode()
+{
+	_ui->erasermode->toggle();
 }
 
 ToolProperties FillSettings::saveToolSettings()
 {
 	ToolProperties cfg(toolType());
-	cfg.setValue("tolerance", _ui->tolerance->value());
-	cfg.setValue("expand", _ui->expand->value());
-	cfg.setValue("samplemerged", _ui->samplemerged->isChecked());
-	cfg.setValue("underfill", _ui->fillunder->isChecked());
+	cfg.setValue(props::tolerance, _ui->tolerance->value());
+	cfg.setValue(props::expand, _ui->expand->value());
+	cfg.setValue(props::samplemerged, _ui->samplemerged->isChecked());
+	cfg.setValue(props::underfill, _ui->fillunder->isChecked());
+	cfg.setValue(props::erasermode, _ui->erasermode->isChecked());
 	return cfg;
 }
 
 void FillSettings::setForeground(const QColor &color)
 {
 	_ui->preview->setColor(color);
-	paintcore::Brush b;
+	brushes::ClassicBrush b;
 	b.setColor(color);
 	controller()->setActiveBrush(b);
 }
 
 void FillSettings::restoreToolSettings(const ToolProperties &cfg)
 {
-	_ui->tolerance->setValue(cfg.value("tolerance", 0).toInt());
-	_ui->expand->setValue(cfg.value("expand", 0).toInt());
-	_ui->samplemerged->setChecked(cfg.value("samplemerged", true).toBool());
-	_ui->fillunder->setChecked(cfg.value("underfill", true).toBool());
+	_ui->tolerance->setValue(cfg.intValue(props::tolerance));
+	_ui->expand->setValue(cfg.intValue(props::expand));
+	_ui->sizelimit->setValue(cfg.value(props::sizelimit).toDouble());
+	_ui->samplemerged->setChecked(cfg.boolValue(props::samplemerged));
+	_ui->fillunder->setChecked(cfg.boolValue(props::underfill));
+	_ui->erasermode->setChecked(cfg.boolValue(props::erasermode));
 	pushSettings();
 }
 

@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2006-2017 Calle Laakkonen
+   Copyright (C) 2006-2019 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -37,7 +37,8 @@ namespace drawingboard {
 CanvasScene::CanvasScene(QObject *parent)
 	: QGraphicsScene(parent), m_image(nullptr), m_model(nullptr),
 	  m_selection(nullptr),
-	  _showAnnotationBorders(false), _showAnnotations(true), _showUserMarkers(true), _showUserLayers(true), _showLaserTrails(true)
+	  _showAnnotationBorders(false), _showAnnotations(true),
+	  m_showUserMarkers(true), m_showUserNames(true), m_showUserLayers(false), m_showUserAvatars(true), m_showLaserTrails(true)
 {
 	setItemIndexMethod(NoIndex);
 
@@ -60,6 +61,7 @@ CanvasScene::~CanvasScene()
 void CanvasScene::initCanvas(canvas::CanvasModel *model)
 {
 	delete m_image;
+	onSelectionChanged(nullptr);
 
 	m_model = model;
 
@@ -147,23 +149,16 @@ void CanvasScene::handleCanvasResize(int xoffset, int yoffset, const QSize &olds
 		return;
 	QRectF bounds = m_image->boundingRect();
 
-	// Include some empty space around the canvas to make working
-	// near the borders easier.
-	const float wPadding = 300;
-	const float hPadding = 300;
-
-	setSceneRect(bounds.adjusted(-wPadding, -hPadding, wPadding, hPadding));
+	setSceneRect(bounds.adjusted(-MARGIN, -MARGIN, MARGIN, MARGIN));
 	emit canvasResized(xoffset, yoffset, oldsize);
 }
 
 AnnotationItem *CanvasScene::getAnnotationItem(int id)
 {
 	for(QGraphicsItem *i : items()) {
-		if(i->type() == AnnotationItem::Type) {
-			AnnotationItem *item = static_cast<AnnotationItem*>(i);
-			if(item->id() == id)
-				return item;
-		}
+		AnnotationItem *item = qgraphicsitem_cast<AnnotationItem*>(i);
+		if(item && item->id() == id)
+			return item;
 	}
 	return nullptr;
 }
@@ -171,10 +166,9 @@ AnnotationItem *CanvasScene::getAnnotationItem(int id)
 void CanvasScene::activeAnnotationChanged(int id)
 {
 	for(QGraphicsItem *i : items()) {
-		if(i->type() == AnnotationItem::Type) {
-			AnnotationItem *item = static_cast<AnnotationItem*>(i);
+		AnnotationItem *item = qgraphicsitem_cast<AnnotationItem*>(i);
+		if(item)
 			item->setHighlight(item->id() == id);
-		}
 	}
 }
 
@@ -182,7 +176,13 @@ void CanvasScene::annotationsAdded(const QModelIndex&, int first, int last)
 {
 	for(int i=first;i<=last;++i) {
 		const QModelIndex a = m_model->layerStack()->annotations()->index(i);
-		AnnotationItem *item = new AnnotationItem(a.data(paintcore::AnnotationModel::IdRole).toInt());
+		const int id = a.data(paintcore::AnnotationModel::IdRole).toInt();
+		if(getAnnotationItem(id)) {
+			qWarning("Annotation item already exists for ID %#x", id);
+			continue;
+		}
+
+		AnnotationItem *item = new AnnotationItem(id);
 		item->setShowBorder(showAnnotationBorders());
 		item->setVisible(_showAnnotations);
 		addItem(item);
@@ -198,6 +198,8 @@ void CanvasScene::annotationsRemoved(const QModelIndex&, int first, int last)
 		AnnotationItem *item = getAnnotationItem(id);
 		if(item)
 			delete item;
+		else
+			qWarning("Could not find annotation item %#x for deletion", id);
 	}
 
 }
@@ -208,8 +210,14 @@ void CanvasScene::annotationsChanged(const QModelIndex &first, const QModelIndex
 	const int ilast = last.row();
 	for(int i=ifirst;i<=ilast;++i) {
 		const QModelIndex a = m_model->layerStack()->annotations()->index(i);
-		AnnotationItem *item = getAnnotationItem(a.data(paintcore::AnnotationModel::IdRole).toInt());
-		Q_ASSERT(item);
+		const int id = a.data(paintcore::AnnotationModel::IdRole).toInt();
+		AnnotationItem *item = getAnnotationItem(id);
+
+		if(!item) {
+			qWarning("Could not find annotation item %#x for update", id);
+			continue;
+		}
+
 		if(changed.isEmpty() || changed.contains(Qt::DisplayRole))
 			item->setText(a.data(Qt::DisplayRole).toString());
 
@@ -244,14 +252,21 @@ void CanvasScene::laserAdded(const QModelIndex&, int first, int last)
 		return;
 
 	// Don't add new lasers when canvas is hidden
-	if(!m_image->isVisible())
+	// or when laser trails are disabled
+	if(!m_image->isVisible() || !m_showLaserTrails)
 		return;
 
 	for(int i=first;i<=last;++i) {
 		const QModelIndex l = m_model->laserTrails()->index(i);
-		LaserTrailItem *item = new LaserTrailItem;
-		addItem(item);
-		m_lasertrails[l.data(canvas::LaserTrailModel::InternalIdRole).toInt()] = item;
+		const int id = l.data(canvas::LaserTrailModel::InternalIdRole).toInt();
+		if(m_lasertrails.contains(id)) {
+			qWarning("Item for laser trail %d already exists!", id);
+			continue;
+		} else {
+			LaserTrailItem *item = new LaserTrailItem;
+			addItem(item);
+			m_lasertrails[id] = item;
+		}
 		laserChanged(l, l, QVector<int>());
 	}
 }
@@ -260,7 +275,7 @@ void CanvasScene::laserRemoved(const QModelIndex&, int first, int last)
 {
 	for(int i=first;i<=last;++i) {
 		const QModelIndex l = m_model->laserTrails()->index(i);
-		int id = l.data(canvas::LaserTrailModel::InternalIdRole).toInt();
+		const int id = l.data(canvas::LaserTrailModel::InternalIdRole).toInt();
 		delete m_lasertrails.take(id);
 	}
 
@@ -268,17 +283,17 @@ void CanvasScene::laserRemoved(const QModelIndex&, int first, int last)
 
 void CanvasScene::laserChanged(const QModelIndex &first, const QModelIndex &last, const QVector<int> &changed)
 {
-	if(!m_image || !m_image->isVisible())
+	if(!m_image || !m_image->isVisible() || !m_showLaserTrails)
 		return;
 
 	const int ifirst = first.row();
 	const int ilast = last.row();
 	for(int i=ifirst;i<=ilast;++i) {
 		const QModelIndex l = m_model->laserTrails()->index(i);
-		int id = l.data(canvas::LaserTrailModel::InternalIdRole).toInt();
+		const int id = l.data(canvas::LaserTrailModel::InternalIdRole).toInt();
 		if(!m_lasertrails.contains(id)) {
 			qWarning("Laser trail %d changed, but not yet created!", id);
-			return;
+			continue;
 		}
 		LaserTrailItem *item = m_lasertrails[id];
 		if(changed.isEmpty() || changed.contains(canvas::LaserTrailModel::ColorRole))
@@ -300,7 +315,7 @@ void CanvasScene::laserChanged(const QModelIndex &first, const QModelIndex &last
  */
 void CanvasScene::advanceUsermarkerAnimation()
 {
-	const float STEP = 0.2; // time delta in seconds
+	const double STEP = 0.2; // time delta in seconds
 
 	for(LaserTrailItem *lt : m_lasertrails)
 		lt->animationStep(STEP);
@@ -317,12 +332,20 @@ void CanvasScene::userCursorAdded(const QModelIndex&, int first, int last)
 {
 	for(int i=first;i<=last;++i) {
 		const QModelIndex um = m_model->userCursors()->index(i);
-		int id = um.data(canvas::UserCursorModel::IdRole).toInt();
-		UserMarkerItem *item = new UserMarkerItem(id);
-		item->setShowSubtext(_showUserLayers);
-		item->hide();
-		addItem(item);
-		m_usermarkers[id] = item;
+		const int id = um.data(canvas::UserCursorModel::IdRole).toInt();
+
+		if(m_usermarkers.contains(id)) {
+			qWarning("User marker item %d already exists!", id);
+
+		} else {
+			UserMarkerItem *item = new UserMarkerItem(id);
+			item->setShowText(m_showUserNames);
+			item->setShowSubtext(m_showUserLayers);
+			item->setShowAvatar(m_showUserAvatars);
+			item->hide();
+			addItem(item);
+			m_usermarkers[id] = item;
+		}
 		userCursorChanged(um, um, QVector<int>());
 	}
 }
@@ -351,6 +374,9 @@ void CanvasScene::userCursorChanged(const QModelIndex &first, const QModelIndex 
 		if(changed.isEmpty() || changed.contains(canvas::UserCursorModel::PositionRole))
 			item->setPos(um.data(canvas::UserCursorModel::PositionRole).toPointF());
 
+		if(changed.isEmpty() || changed.contains(Qt::DecorationRole))
+			item->setAvatar(um.data(Qt::DecorationRole).value<QPixmap>());
+
 		if(changed.isEmpty() || changed.contains(Qt::DisplayRole))
 			item->setText(um.data(Qt::DisplayRole).toString());
 
@@ -361,7 +387,7 @@ void CanvasScene::userCursorChanged(const QModelIndex &first, const QModelIndex 
 			item->setColor(um.data(canvas::UserCursorModel::ColorRole).value<QColor>());
 
 		if(changed.isEmpty() || changed.contains(canvas::UserCursorModel::VisibleRole)) {
-			if(_showUserMarkers) {
+			if(m_showUserMarkers) {
 				bool v = um.data(canvas::UserCursorModel::VisibleRole).toBool();
 				if(v)
 					item->fadein();
@@ -374,8 +400,8 @@ void CanvasScene::userCursorChanged(const QModelIndex &first, const QModelIndex 
 
 void CanvasScene::showUserMarkers(bool show)
 {
-	if(_showUserMarkers != show) {
-		_showUserMarkers = show;
+	if(m_showUserMarkers != show) {
+		m_showUserMarkers = show;
 		for(UserMarkerItem *item : m_usermarkers) {
 			if(show) {
 				if(m_model->userCursors()->indexForId(item->id()).data(canvas::UserCursorModel::VisibleRole).toBool())
@@ -387,18 +413,36 @@ void CanvasScene::showUserMarkers(bool show)
 	}
 }
 
+void CanvasScene::showUserNames(bool show)
+{
+	if(m_showUserNames != show) {
+		m_showUserNames = show;
+		for(UserMarkerItem *item : m_usermarkers)
+			item->setShowText(show);
+	}
+}
+
 void CanvasScene::showUserLayers(bool show)
 {
-	if(_showUserLayers != show) {
-		_showUserLayers = show;
+	if(m_showUserLayers != show) {
+		m_showUserLayers = show;
 		for(UserMarkerItem *item : m_usermarkers)
 			item->setShowSubtext(show);
 	}
 }
 
+void CanvasScene::showUserAvatars(bool show)
+{
+	if(m_showUserAvatars != show) {
+		m_showUserAvatars = show;
+		for(UserMarkerItem *item : m_usermarkers)
+			item->setShowAvatar(show);
+	}
+}
+
 void CanvasScene::showLaserTrails(bool show)
 {
-	_showLaserTrails = show;
+	m_showLaserTrails = show;
 	for(LaserTrailItem *i : m_lasertrails)
 		i->hide();
 }

@@ -57,6 +57,8 @@ public slots:
 	void hostDisconnecting();
 	void hostDisconnected();
 
+	void setRoomcode(const QString &roomcode);
+
 	void bytesReceived(int count);
 	void bytesSent(int count);
 
@@ -75,12 +77,10 @@ public slots:
 	void hideDownloadProgress();
 
 	void join(int id, const QString& user);
-	void leave(const QString& user);
+	void leave(int id, const QString& user);
 
 	//! This user was kicked off the session
 	void kicked(const QString& user);
-
-	void setLowSpaceAlert(bool lowSpace);
 
 	void copyAddress();
 	void copyUrl();
@@ -98,17 +98,23 @@ private slots:
 private:
 	void showCGNAlert();
 	void message(const QString &msg);
+	void updateLabel();
+
+	enum { NotConnected, Connecting, LoggedIn, Disconnecting } m_state;
 
 	QString fullAddress() const;
 
 	QPointer<dialogs::NetStats> _netstats;
 	QProgressBar *m_download;
 
-	QLabel *_label, *_security, *m_lowspace;
+	QLabel *m_label, *m_security;
 	PopupMessage *m_popup;
-	QString _address;
-	int _port;
-	QUrl _sessionUrl;
+	QString m_address;
+	QString m_roomcode;
+	int m_port;
+	QUrl m_sessionUrl;
+
+	bool m_hideServer;
 
 	QAction *_copyaction;
 	QAction *_urlaction;

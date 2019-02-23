@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2015-2017 Calle Laakkonen
+   Copyright (C) 2015-2018 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -17,24 +17,16 @@
    along with Drawpile.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#ifndef ANNOUNCEMENTAPI_H
-#define ANNOUNCEMENTAPI_H
+#ifndef ANNOUNCEMENTAPI_V2_H
+#define ANNOUNCEMENTAPI_V2_H
 
 #include "../net/protover.h"
 
 #include <QObject>
 #include <QDateTime>
 #include <QUrl>
+#include <QVariant>
 #include <QStringList>
-
-#include <functional>
-
-class QNetworkAccessManager;
-class QNetworkReply;
-
-namespace server {
-	class Log;
-}
 
 namespace sessionlisting {
 
@@ -43,6 +35,12 @@ struct ListServerInfo {
 	QString name;
 	QString description;
 	QString faviconUrl;
+};
+
+enum class PrivacyMode {
+	Undefined, // not specified, defaults to public
+	Public,
+	Private
 };
 
 struct Session {
@@ -55,115 +53,103 @@ struct Session {
 	QStringList usernames;
 	bool password;
 	bool nsfm;
+	PrivacyMode isPrivate;
 	QString owner;
 	QDateTime started;
 };
 
 struct Announcement {
-	Announcement() : listingId(0) { }
-
 	QUrl apiUrl;
 	QString id;
 	QString updateKey;
+	QString roomcode;
 	int listingId;
 	int refreshInterval;
-};
-
-/**
- * @brief Public session listing API client
- */
-class AnnouncementApi : public QObject
-{
-	Q_OBJECT
-public:
-	explicit AnnouncementApi(QObject *parent=nullptr);
-
-	/**
-	 * @brief Set the address of this server
-	 *
-	 * This can be used to set the canonical server address to use
-	 * when announcing a session. If not set, the listing server will use
-	 * the peer address of the announcing machine.
-	 *
-	 * @param addr canonical address of this server
-	 */
-	void setLocalAddress(const QString &addr) { m_localAddress = addr; }
-
-	/**
-	 * @brief Get the local address
-	 *
-	 * This will return an empty string if local address is not explicitly set
-	 */
-	QString localAddress() const { return m_localAddress; }
-
-	/**
-	 * @brief Query information about the API
-	 */
-	void getApiInfo(const QUrl &apiUrl);
-
-	/**
-	 * @brief Send a request for a session list
-	 *
-	 * The signal sessionListReceived is emitted when the query finishes successfully.
-	 *
-	 * @param protocol if empty, limit query to sessions with this protocol version
-	 * @param title if empty, limit query to sessions whose title contains this string
-	 * @param nsfm if set to false, sessions tagged as "Not Suitable For Minors" will not be fetched
-	 */
-	void getSessionList(const QUrl &apiUrl, const QString &protocol=QString(), const QString &title=QString(), bool nsfm=false);
-
-	/**
-	 * @brief Send session announcement
-	 * @param apiUrl
-	 * @param session
-	 */
-	void announceSession(const QUrl &apiUrl, const Session &session);
-
-	/**
-	 * @brief Refresh the session previously announced with announceSession
-	 */
-	void refreshSession(const Announcement &a, const Session &session);
-
-	/**
-	 * @brief Unlist the session previously announced with announceSession
-	 */
-	void unlistSession(const Announcement &a);
-
-signals:
-	//! Server info reply received
-	void serverInfo(const ListServerInfo &info);
-
-	//! Session list received
-	void sessionListReceived(const QList<Session> &sessions);
-
-	//! A message was received in response to a succesfull announcement
-	void messageReceived(const QString &message);
-
-	//! Session was announced succesfully
-	void sessionAnnounced(const Announcement &session);
-
-	//! Session was unlisted succesfully
-	void unlisted(const QString &apiUrl, const QString &sessionId);
-
-	//! An error occurred
-	void error(const QString &apiUrl, const QString &errorString);
-
-	//! A log message
-	void logMessage(const server::Log &message);
-
-private:
-	typedef void (AnnouncementApi::*HandlerFunc)(QNetworkReply*);
-	void handleResponse(QNetworkReply *reply, HandlerFunc);
-
-	void handleAnnounceResponse(QNetworkReply *reply);
-	void handleUnlistResponse(QNetworkReply *reply);
-	void handleRefreshResponse(QNetworkReply *reply);
-	void handleListingResponse(QNetworkReply *reply);
-	void handleServerInfoResponse(QNetworkReply *reply);
-
-	QString m_localAddress;
+	bool isPrivate;
 };
 
 }
 
-#endif // ANNOUNCEMENTAPI_H
+Q_DECLARE_METATYPE(sessionlisting::ListServerInfo)
+Q_DECLARE_METATYPE(sessionlisting::Session)
+Q_DECLARE_METATYPE(sessionlisting::Announcement)
+
+namespace sessionlisting {
+
+class AnnouncementApiResponse : public QObject
+{
+	Q_OBJECT
+public:
+	AnnouncementApiResponse(const QUrl &url, QObject *parent=nullptr)
+		: QObject(parent), m_apiUrl(url)
+	{ }
+
+	void setResult(const QVariant &result, const QString &message=QString());
+	void setError(const QString &error);
+
+	QUrl apiUrl() const { return m_apiUrl; }
+	QVariant result() const { return m_result; }
+	QString message() const { return m_message; }
+	QString errorMessage() const { return m_error; }
+
+signals:
+	void finished(const QVariant &result, const QString &message, const QString &error);
+
+private:
+	QUrl m_apiUrl;
+	QVariant m_result;
+	QString m_message;
+	QString m_error;
+};
+
+/**
+ * @brief Fetch information about a listing server
+ *
+ * Returns ListServerInfo
+ */
+AnnouncementApiResponse *getApiInfo(const QUrl &apiUrl);
+
+/**
+ * @brief Fetch the list of public sessions from a listing server
+ *
+ * @param url API url
+ * @param protocol if specified, return only sessions using the given protocol
+ * @param title if specified, return only sessions whose title contains this substring
+ * @param nsfm if true, fetch sessions tagged as NSFM
+ *
+ * Returns QList<Session>
+ */
+AnnouncementApiResponse *getSessionList(const QUrl &apiUrl, const QString &protocol=QString(), const QString &title=QString(), bool nsfm=false);
+
+/**
+ * @brief Announce a session at the given listing server
+ *
+ * Returns Announcement
+ */
+AnnouncementApiResponse *announceSession(const QUrl &apiUrl, const Session &session);
+
+/**
+ * @brief Refresh a session announcement
+ *
+ * Returns the session ID and may set the result message.
+ */
+AnnouncementApiResponse *refreshSession(const Announcement &a, const Session &session);
+
+/**
+ * @brief Unlist a session announcement
+ *
+ * Returns the session ID
+ */
+AnnouncementApiResponse *unlistSession(const Announcement &a);
+
+/**
+ * @brief Query this server for a room code
+ *
+ * Returns a Session
+ */
+AnnouncementApiResponse *queryRoomcode(const QUrl &apiUrl, const QString &roomcode);
+
+}
+
+#endif
+

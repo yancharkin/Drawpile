@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2015-2016 Calle Laakkonen
+   Copyright (C) 2015-2019 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -25,6 +25,7 @@
 
 #include "../shared/record/reader.h"
 #include "../shared/net/recording.h"
+#include "net/internalmsg.h"
 
 #include "canvas/statetracker.h"
 #include "canvas/canvasmodel.h"
@@ -46,9 +47,9 @@ PlaybackController::PlaybackController(canvas::CanvasModel *canvas, Reader *read
 {
 	reader->setParent(this);
 
-	m_timer = new QTimer(this);
-	m_timer->setSingleShot(true);
-	connect(m_timer, &QTimer::timeout, this, &PlaybackController::nextCommand);
+	m_autoplayTimer = new QTimer(this);
+	m_autoplayTimer->setSingleShot(true);
+	connect(m_autoplayTimer, &QTimer::timeout, this, &PlaybackController::nextCommand);
 
 	// Restore settings
 	QSettings cfg;
@@ -56,9 +57,10 @@ PlaybackController::PlaybackController(canvas::CanvasModel *canvas, Reader *read
 	m_stopOnMarkers = cfg.value("stoponmarkers", true).toBool();
 
 	// Automatically take the first step
-	m_timer->start(0);
+	m_autoplayTimer->start(0);
 
 	connect(this, &PlaybackController::endOfFileReached, [this]() { setPlaying(false); });
+	connect(canvas->stateTracker(), &canvas::StateTracker::sequencePoint, this, &PlaybackController::onSequencePoint);
 }
 
 PlaybackController::~PlaybackController()
@@ -107,9 +109,9 @@ void PlaybackController::setPlaying(bool play)
 	if(play != m_play) {
 		m_play = play;
 		if(play)
-			m_timer->start(0);
+			m_autoplayTimer->start(0);
 		else
-			m_timer->stop();
+			m_autoplayTimer->stop();
 
 		emit playbackToggled(play);
 	}
@@ -132,66 +134,68 @@ void PlaybackController::nextCommands(int stepCount)
 		return;
 	}
 
-	MessageRecord next = m_reader->readNext();
+	while(stepCount-->0) {
+		MessageRecord next = m_reader->readNext();
 
-	int writeFrames = 1;
+		switch(next.status) {
+		case MessageRecord::OK: {
+			if(next.message->type() == protocol::MSG_INTERVAL) {
+				if(m_play) {
+					// Autoplay mode: pause for the given interval
+					expectSequencePoint(next.message.cast<protocol::Interval>().milliseconds() / m_speedFactor);
+					return;
 
-	switch(next.status) {
-	case MessageRecord::OK: {
-		protocol::MessagePtr msg(next.message);
-
-		if(msg->type() == protocol::MSG_INTERVAL) {
-			if(m_play) {
-				// Autoplay mode: pause for the given interval
-				int interval = msg.cast<protocol::Interval>().milliseconds();
-				int maxinterval = m_maxInterval * 1000;
-				m_timer->start(qMin(maxinterval, int(interval / m_speedFactor)));
-
-				if(m_exporter && m_autosave) {
-					int pauseframes = qRound(qMin(interval, maxinterval) / 1000.0 *  m_exporter->fps());
-					if(pauseframes>0)
-						writeFrames = pauseframes;
+				} else {
+					// Manual mode: skip interval
+					++stepCount;
 				}
 
 			} else {
-				// Manual mode: skip interval
-				nextCommands(1);
-				return;
-			}
-		} else {
-			if(m_play) {
-				if(msg->type() == protocol::MSG_MARKER && m_stopOnMarkers) {
-					setPlaying(false);
-					// TODO move to client shell
-					//notification::playSound(notification::Event::MARKER);
-				} else {
-					if(stepCount==1)
-						m_timer->start(int(qMax(1.0, 33.0 / m_speedFactor) + 0.5));
+				if(next.message->type() == protocol::MSG_MARKER) {
+					emit markerEncountered(next.message.cast<protocol::Marker>().text());
+					if(m_stopOnMarkers)
+						setPlaying(false);
 				}
+
+				m_canvas->handleCommand(protocol::MessagePtr::fromNullable(next.message));
 			}
-
-			emit commandRead(msg);
+			break;
 		}
-		break;
-	}
-	case MessageRecord::INVALID:
-		qWarning("Unrecognized command %d of length %d", next.error.type, next.error.len);
-		if(m_play)
-			m_timer->start(1);
-		break;
-	case MessageRecord::END_OF_RECORDING:
-		emit endOfFileReached();
-		break;
+		case MessageRecord::INVALID:
+			qWarning("Unrecognized command %d of length %d", next.invalid_type, next.invalid_len);
+			break;
+		case MessageRecord::END_OF_RECORDING:
+			emit endOfFileReached();
+			break;
+		}
 	}
 
-	if(stepCount>1) {
-		nextCommands(stepCount-1);
+	expectSequencePoint(qMax(1.0, 33.0 / m_speedFactor) + 0.5);
+}
 
-	} else {
-		if(m_exporter && m_autosave)
-			exportFrame(writeFrames);
+void PlaybackController::expectSequencePoint(int interval)
+{
+	// We have just queued a sequence of messages for execution.
+	// Add a trailing SequencePoint and start expecting its roundtrip.
+	m_sequenceTimer.restart();
+	m_canvas->handleCommand(protocol::ClientInternal::makeSequencePoint(interval));
+}
 
-		updateIndexPosition();
+void PlaybackController::onSequencePoint(int interval)
+{
+	// A message sequence has just been fully executed.
+	const int maxInterval = m_maxInterval * 1000;
+	if(m_exporter && m_autosave) {
+		const int writeFrames = qBound(1, int(interval / 1000.0 * m_exporter->fps()), maxInterval);
+		exportFrame(writeFrames);
+	}
+
+	updateIndexPosition();
+
+	// Continue playback (if in autoplay mode)
+	if(m_play) {
+		qint64 elapsed = m_sequenceTimer.elapsed();
+		m_autoplayTimer->start(qBound(1, int(interval / m_speedFactor - elapsed), maxInterval));
 	}
 }
 
@@ -206,17 +210,15 @@ void PlaybackController::nextSequence()
 		MessageRecord next = m_reader->readNext();
 		switch(next.status) {
 		case MessageRecord::OK:
-			if(next.message->type() == protocol::MSG_INTERVAL) {
-				// skip intervals
-				delete next.message;
-			} else {
-				emit commandRead(protocol::MessagePtr(next.message));
+			// skip intervals
+			if(next.message->type() != protocol::MSG_INTERVAL) {
+				m_canvas->handleCommand(protocol::MessagePtr::fromNullable(next.message));
 				if(next.message->type() == protocol::MSG_UNDOPOINT)
 					loop = false;
 			}
 			break;
 		case MessageRecord::INVALID:
-			qWarning("Unrecognized command %d of length %d", next.error.type, next.error.len);
+			qWarning("Unrecognized command %d of length %d", next.invalid_type, next.invalid_len);
 			break;
 		case MessageRecord::END_OF_RECORDING:
 			emit endOfFileReached();
@@ -225,10 +227,7 @@ void PlaybackController::nextSequence()
 		}
 	}
 
-	if(m_exporter && m_autosave)
-		exportFrame();
-
-	updateIndexPosition();
+	expectSequencePoint(0);
 }
 
 void PlaybackController::prevSequence()
@@ -271,15 +270,13 @@ void PlaybackController::jumpTo(int pos)
 		MessageRecord next = m_reader->readNext();
 		switch(next.status) {
 		case MessageRecord::OK:
-			if(next.message->type() == protocol::MSG_INTERVAL) {
-				// skip intervals
-				delete next.message;
-			} else {
-				emit commandRead(protocol::MessagePtr(next.message));
+			// skip intervals
+			if(next.message->type() != protocol::MSG_INTERVAL) {
+				m_canvas->handleCommand(protocol::MessagePtr::fromNullable(next.message));
 			}
 			break;
 		case MessageRecord::INVALID:
-			qWarning("Unrecognized command %d of length %d", next.error.type, next.error.len);
+			qWarning("Unrecognized command %d of length %d", next.invalid_type, next.invalid_len);
 			break;
 		case MessageRecord::END_OF_RECORDING:
 			emit endOfFileReached();
@@ -287,10 +284,7 @@ void PlaybackController::jumpTo(int pos)
 		}
 	}
 
-	if(m_exporter && m_autosave)
-		exportFrame();
-
-	updateIndexPosition();
+	expectSequencePoint(0);
 }
 
 void PlaybackController::jumpToSnapshot(int idx)
@@ -298,7 +292,7 @@ void PlaybackController::jumpToSnapshot(int idx)
 	Q_ASSERT(m_indexloader);
 
 	StopEntry se = m_indexloader->index().entry(idx);
-	canvas::StateSavepoint savepoint = m_indexloader->loadSavepoint(idx, m_canvas->stateTracker());
+	canvas::StateSavepoint savepoint = m_indexloader->loadSavepoint(idx);
 
 	if(!savepoint) {
 		qWarning("error loading savepoint");
@@ -353,12 +347,12 @@ void PlaybackController::buildIndex()
 	m_indexbuilder->moveToThread(thread);
 
 	const qreal filesize = m_reader->filesize();
-	connect(m_indexbuilder.data(), &IndexBuilder::progress, [this, filesize](int progress) {
+	connect(m_indexbuilder.data(), &IndexBuilder::progress, this, [this, filesize](int progress) {
 		m_indexBuildProgress = progress / filesize;
 		emit indexBuildProgressed(m_indexBuildProgress);
 	});
 
-	connect(m_indexbuilder.data(), &IndexBuilder::done, [this](bool ok, const QString &error) {
+	connect(m_indexbuilder.data(), &IndexBuilder::done, this, [this](bool ok, const QString &error) {
 		if(!ok) {
 			m_indexBuildProgress = 0;
 			emit indexBuildProgressed(0);

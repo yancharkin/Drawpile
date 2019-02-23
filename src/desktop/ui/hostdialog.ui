@@ -9,8 +9,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>409</width>
-    <height>366</height>
+    <width>315</width>
+    <height>479</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -18,247 +18,179 @@
   </property>
   <layout class="QVBoxLayout" name="verticalLayout">
    <item>
-    <widget class="QTabWidget" name="tabWidget">
-     <property name="currentIndex">
-      <number>0</number>
+    <widget class="QGroupBox" name="groupBox_3">
+     <property name="title">
+      <string>Session</string>
      </property>
-     <widget class="QWidget" name="tab">
-      <attribute name="title">
-       <string>Session</string>
-      </attribute>
-      <layout class="QFormLayout" name="formLayout_3">
-       <property name="fieldGrowthPolicy">
-        <enum>QFormLayout::ExpandingFieldsGrow</enum>
-       </property>
-       <item row="0" column="0">
-        <widget class="QLabel" name="label">
-         <property name="text">
-          <string>T&amp;itle:</string>
-         </property>
-         <property name="buddy">
-          <cstring>sessiontitle</cstring>
-         </property>
-        </widget>
-       </item>
-       <item row="0" column="1">
-        <widget class="QLineEdit" name="sessiontitle">
-         <property name="toolTip">
-          <string>The title is shown in the application title bar and in the session selection dialog</string>
-         </property>
-        </widget>
-       </item>
-       <item row="1" column="0">
-        <widget class="QLabel" name="label_2">
-         <property name="text">
-          <string>&amp;Username:</string>
-         </property>
-         <property name="buddy">
-          <cstring>username</cstring>
-         </property>
-        </widget>
-       </item>
-       <item row="1" column="1">
-        <widget class="QLineEdit" name="username">
-         <property name="sizePolicy">
-          <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
-           <horstretch>0</horstretch>
-           <verstretch>0</verstretch>
-          </sizepolicy>
-         </property>
-         <property name="maxLength">
-          <number>22</number>
-         </property>
-         <property name="mandatoryfield" stdset="0">
-          <bool>true</bool>
-         </property>
-        </widget>
-       </item>
-       <item row="2" column="0">
-        <widget class="QLabel" name="label_3">
-         <property name="text">
-          <string>&amp;Password:</string>
-         </property>
-         <property name="buddy">
-          <cstring>sessionpassword</cstring>
-         </property>
-        </widget>
-       </item>
-       <item row="2" column="1">
-        <widget class="QLineEdit" name="sessionpassword">
-         <property name="sizePolicy">
-          <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
-           <horstretch>0</horstretch>
-           <verstretch>0</verstretch>
-          </sizepolicy>
-         </property>
-         <property name="toolTip">
-          <string>Optional. If left blank, no password will be needed to join this session.</string>
-         </property>
-         <property name="echoMode">
-          <enum>QLineEdit::PasswordEchoOnEdit</enum>
-         </property>
-        </widget>
-       </item>
-       <item row="3" column="0">
-        <widget class="QLabel" name="label_6">
-         <property name="text">
-          <string>ID alias:</string>
-         </property>
-         <property name="buddy">
-          <cstring>idAlias</cstring>
-         </property>
-        </widget>
-       </item>
-       <item row="3" column="1">
-        <widget class="QLineEdit" name="idAlias">
-         <property name="sizePolicy">
-          <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
-           <horstretch>0</horstretch>
-           <verstretch>0</verstretch>
-          </sizepolicy>
-         </property>
-         <property name="toolTip">
-          <string>An optional user friendly ID for the session</string>
-         </property>
-        </widget>
-       </item>
-       <item row="4" column="0">
-        <widget class="QCheckBox" name="announce">
-         <property name="toolTip">
-          <string>Announce the session at a public list</string>
-         </property>
-         <property name="text">
-          <string>Announce at:</string>
-         </property>
-        </widget>
-       </item>
-       <item row="4" column="1">
-        <widget class="QComboBox" name="listingserver">
-         <property name="enabled">
-          <bool>false</bool>
-         </property>
-         <property name="sizePolicy">
-          <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
-           <horstretch>0</horstretch>
-           <verstretch>0</verstretch>
-          </sizepolicy>
-         </property>
-        </widget>
-       </item>
-      </layout>
-     </widget>
-     <widget class="QWidget" name="tab_2">
-      <attribute name="title">
-       <string>Settings</string>
-      </attribute>
-      <layout class="QFormLayout" name="formLayout_2">
-       <property name="fieldGrowthPolicy">
-        <enum>QFormLayout::FieldsStayAtSizeHint</enum>
-       </property>
-       <item row="1" column="0">
-        <widget class="QLabel" name="label_11">
-         <property name="text">
-          <string>&amp;User limit:</string>
-         </property>
-         <property name="buddy">
-          <cstring>userlimit</cstring>
-         </property>
-        </widget>
-       </item>
-       <item row="1" column="1">
-        <widget class="QSpinBox" name="userlimit">
-         <property name="minimumSize">
-          <size>
-           <width>60</width>
-           <height>0</height>
-          </size>
-         </property>
-         <property name="minimum">
-          <number>2</number>
-         </property>
-         <property name="maximum">
-          <number>255</number>
-         </property>
-         <property name="value">
-          <number>20</number>
-         </property>
-        </widget>
-       </item>
-       <item row="3" column="0">
-        <widget class="QLabel" name="label_8">
-         <property name="text">
-          <string>Options:</string>
-         </property>
-        </widget>
-       </item>
-       <item row="3" column="1">
-        <widget class="QCheckBox" name="allowdrawing">
-         <property name="text">
-          <string>Allow drawing by default</string>
-         </property>
-         <property name="checked">
-          <bool>true</bool>
-         </property>
-        </widget>
-       </item>
-       <item row="4" column="1">
-        <widget class="QCheckBox" name="layerctrllock">
-         <property name="text">
-          <string>Lock layer controls</string>
-         </property>
-         <property name="checked">
-          <bool>true</bool>
-         </property>
-        </widget>
-       </item>
-       <item row="5" column="1">
-        <widget class="QCheckBox" name="persistentSession">
-         <property name="toolTip">
-          <string>A persistent session can be joined even after all users have left</string>
-         </property>
-         <property name="text">
-          <string>Persistent session</string>
-         </property>
-        </widget>
-       </item>
-       <item row="6" column="1">
-        <widget class="QCheckBox" name="preservechat">
-         <property name="text">
-          <string>Preserve chat</string>
-         </property>
-        </widget>
-       </item>
-      </layout>
-     </widget>
+     <layout class="QFormLayout" name="formLayout_2">
+      <item row="0" column="0">
+       <widget class="QLabel" name="label">
+        <property name="text">
+         <string>&amp;Title:</string>
+        </property>
+        <property name="buddy">
+         <cstring>sessiontitle</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QLineEdit" name="sessiontitle">
+        <property name="toolTip">
+         <string>The title is shown in the application title bar and in the session selection dialog</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="label_3">
+        <property name="text">
+         <string>&amp;Password:</string>
+        </property>
+        <property name="buddy">
+         <cstring>sessionpassword</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QLineEdit" name="sessionpassword">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+          <horstretch>0</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
+        <property name="toolTip">
+         <string>Optional. If left blank, no password will be needed to join this session.</string>
+        </property>
+        <property name="echoMode">
+         <enum>QLineEdit::PasswordEchoOnEdit</enum>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="label_6">
+        <property name="text">
+         <string>ID a&amp;lias:</string>
+        </property>
+        <property name="buddy">
+         <cstring>idAlias</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QLineEdit" name="idAlias">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+          <horstretch>0</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
+        <property name="toolTip">
+         <string>An optional user friendly ID for the session</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
     </widget>
    </item>
    <item>
-    <widget class="QGroupBox" name="groupBox">
+    <widget class="QGroupBox" name="groupBox_2">
      <property name="title">
-      <string>Server</string>
+      <string>Listing</string>
      </property>
-     <layout class="QGridLayout" name="gridLayout">
-      <property name="verticalSpacing">
-       <number>2</number>
-      </property>
+     <layout class="QFormLayout" name="formLayout">
       <item row="0" column="0">
-       <widget class="QRadioButton" name="uselocal">
+       <widget class="QCheckBox" name="announce">
+        <property name="toolTip">
+         <string>Announce the session at a public list</string>
+        </property>
         <property name="text">
-         <string>Bui&amp;lt-in</string>
+         <string>List at:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QComboBox" name="listingserver">
+        <property name="enabled">
+         <bool>false</bool>
+        </property>
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+          <horstretch>0</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="label_4">
+        <property name="text">
+         <string>Type:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QRadioButton" name="listPublic">
+        <property name="enabled">
+         <bool>false</bool>
+        </property>
+        <property name="text">
+         <string>P&amp;ublic</string>
         </property>
         <property name="checked">
          <bool>true</bool>
         </property>
        </widget>
       </item>
+      <item row="2" column="1">
+       <widget class="QRadioButton" name="listPrivate">
+        <property name="enabled">
+         <bool>false</bool>
+        </property>
+        <property name="text">
+         <string>Private (room code onl&amp;y)</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupBox">
+     <property name="title">
+      <string>Hosting</string>
+     </property>
+     <layout class="QFormLayout" name="formLayout_3">
       <item row="1" column="0">
+       <widget class="QLabel" name="label_5">
+        <property name="text">
+         <string>Server:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QRadioButton" name="uselocal">
+        <property name="toolTip">
+         <string>Use Drawpile's built-in server</string>
+        </property>
+        <property name="text">
+         <string>This co&amp;mputer</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="1">
        <widget class="QRadioButton" name="useremote">
+        <property name="toolTip">
+         <string>Use an external dedicated server</string>
+        </property>
         <property name="text">
          <string>Re&amp;mote:</string>
         </property>
        </widget>
       </item>
-      <item row="1" column="1">
+      <item row="5" column="1">
        <widget class="QComboBox" name="remotehost">
         <property name="enabled">
          <bool>false</bool>
@@ -283,6 +215,9 @@
         </property>
         <property name="insertPolicy">
          <enum>QComboBox::InsertAtTop</enum>
+        </property>
+        <property name="mandatoryfield" stdset="0">
+         <bool>false</bool>
         </property>
        </widget>
       </item>
@@ -313,8 +248,8 @@
    <slot>accept()</slot>
    <hints>
     <hint type="sourcelabel">
-     <x>258</x>
-     <y>330</y>
+     <x>264</x>
+     <y>485</y>
     </hint>
     <hint type="destinationlabel">
      <x>157</x>
@@ -329,8 +264,8 @@
    <slot>reject()</slot>
    <hints>
     <hint type="sourcelabel">
-     <x>326</x>
-     <y>330</y>
+     <x>332</x>
+     <y>485</y>
     </hint>
     <hint type="destinationlabel">
      <x>286</x>
@@ -345,12 +280,12 @@
    <slot>setEnabled(bool)</slot>
    <hints>
     <hint type="sourcelabel">
-     <x>90</x>
-     <y>290</y>
+     <x>97</x>
+     <y>434</y>
     </hint>
     <hint type="destinationlabel">
-     <x>371</x>
-     <y>291</y>
+     <x>394</x>
+     <y>439</y>
     </hint>
    </hints>
   </connection>
@@ -361,12 +296,44 @@
    <slot>setEnabled(bool)</slot>
    <hints>
     <hint type="sourcelabel">
-     <x>102</x>
-     <y>203</y>
+     <x>57</x>
+     <y>247</y>
     </hint>
     <hint type="destinationlabel">
-     <x>211</x>
-     <y>213</y>
+     <x>128</x>
+     <y>249</y>
+    </hint>
+   </hints>
+  </connection>
+  <connection>
+   <sender>announce</sender>
+   <signal>toggled(bool)</signal>
+   <receiver>listPublic</receiver>
+   <slot>setEnabled(bool)</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>58</x>
+     <y>243</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>116</x>
+     <y>277</y>
+    </hint>
+   </hints>
+  </connection>
+  <connection>
+   <sender>announce</sender>
+   <signal>toggled(bool)</signal>
+   <receiver>listPrivate</receiver>
+   <slot>setEnabled(bool)</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>64</x>
+     <y>245</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>146</x>
+     <y>303</y>
     </hint>
    </hints>
   </connection>

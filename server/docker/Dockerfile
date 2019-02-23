@@ -1,33 +1,27 @@
-FROM ubuntu:15.04
-RUN apt-get update \
- && apt-get install \
-    wget \
-    cmake \
-    make \
-    qtbase5-dev \
-    libkf5archive-dev \
-    g++ \
-    qtm \
-    qtmultimedia5-dev \
-    libqt5svg5-dev \
-    libgif-dev \
-    libkf5dnssd-dev \
-    -y \
- && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+## Common base
+FROM alpine:3.9 as common
+RUN apk add --no-cache qt5-qtbase qt5-qtbase-sqlite libmicrohttpd libbz2 libsodium
 
-ENV VERSION 1.0.2
+## Build container
+FROM common as builder
+RUN apk add qt5-qtbase-dev libmicrohttpd-dev libsodium-dev cmake make g++
+WORKDIR /build/
 
-RUN wget http://drawpile.net/files/src/drawpile-$VERSION.tar.gz \
- && tar -xf drawpile-$VERSION.tar.gz \
- && cd drawpile-$VERSION \
- && mkdir build \
- && cd build \
- && cmake .. \
- && make \
- && make install
+COPY build-deps.sh /build/
+RUN sh build-deps.sh
 
-RUN cd / && rm -rf /drawpile-*
-RUN useradd -m drawpile
+ARG version=master
+RUN wget https://github.com/drawpile/Drawpile/archive/${version}.zip -O /build/drawpile.zip
+COPY build.sh /build/
+RUN sh build.sh
+
+## Final deployment image
+FROM common
+COPY --from=builder /build/drawpile-srv /bin
+COPY --from=builder /build/karchive*/build/bin/libKF5* /usr/lib/
+RUN adduser -D drawpile
+
+EXPOSE 27750
 USER drawpile
-EXPOSE 8080
-CMD drawpile-srv --persistent --listen 0.0.0.0 --port 8080 --verbose --title "Docker Drawpile"
+ENTRYPOINT ["/bin/drawpile-srv"]
+

@@ -45,7 +45,8 @@ public:
 	enum Flag {
 		Persistent = 0x01,
 		PreserveChat = 0x02,
-		Nsfm = 0x04
+		Nsfm = 0x04,
+		Deputies = 0x08
 	};
 	Q_DECLARE_FLAGS(Flags, Flag)
 
@@ -74,14 +75,14 @@ public:
 	 */
 	virtual QByteArray passwordHash() const = 0;
 
-	//! Set (or clear) this session's password
-	virtual void setPassword(const QString &password) = 0;
+	//! Set (or clear) this session's password hash
+	virtual void setPasswordHash(const QByteArray &passwordHash) = 0;
 
 	//! Get the operator password hash
 	virtual QByteArray opwordHash() const = 0;
 
 	//! Set (or clear) the operator password
-	virtual void setOpword(const QString &opword) = 0;
+	virtual void setOpwordHash(const QByteArray &opword) = 0;
 
 	//! Get the starting timestamp
 	virtual QDateTime startTime() const = 0;
@@ -107,12 +108,24 @@ public:
 	//! Remember a user who joined
 	virtual void joinUser(uint8_t id, const QString &name);
 
+	//! Set the history size threshold for requesting autoreset
+	virtual void setAutoResetThreshold(uint limit) = 0;
+
+	//! Get the history autoreset request threshold
+	virtual uint autoResetThreshold() const = 0;
+
+	//! Get the final autoreset threshold that includes the reset image base size
+	uint effectiveAutoResetThreshold() const;
+
+	//! Get the reset image base size
+	uint autoResetThresholdBase() const { return m_autoResetBaseSize; }
+
 	/**
 	 * @brief Add a new message to the history
 	 *
 	 * The signal newMessagesAvailable() will be emitted.
 	 *
-	 * @return false if adding this message would put the history over the size limit
+	 * @return false if there was no space for this message
 	 */
 	bool addMessage(const protocol::MessagePtr &msg);
 
@@ -154,9 +167,11 @@ public:
 	virtual void terminate() = 0;
 
 	/**
-	 * @brief Set the size limit for the history.
+	 * @brief Set the hard size limit for the history.
 	 *
 	 * The size limit is checked when new messages are added to the session.
+	 *
+	 * See also the autoreset threshold.
 	 *
 	 * @param limit maximum size in bytes or 0 for no limit
 	 */
@@ -176,6 +191,11 @@ public:
 	 * representation.
 	 */
 	uint sizeInBytes() const { return m_sizeInBytes; }
+
+	/**
+	 * @brief Has the session ran out of space
+	 */
+	bool isOutOfSpace() const { return m_sizeLimit>0 && m_sizeInBytes >= m_sizeLimit; }
 
 	/**
 	 * @brief Get the index number of the first message in history
@@ -198,7 +218,7 @@ public:
 	/**
 	 * @brief Add a new banlist entry
 	 */
-	bool addBan(const QString &username, const QHostAddress &ip, const QString &bannedBy);
+	bool addBan(const QString &username, const QHostAddress &ip, const QString &extAuthId, const QString &bannedBy);
 
 	/**
 	 * @brief removeBan Remove a banlist entry
@@ -240,9 +260,22 @@ public:
 	virtual void setAuthenticatedOperator(const QString &username, bool op) = 0;
 
 	/**
+	 * @brief Set an authenticated user's trust status
+	 *
+	 * This is used to remember an authenticated user's status so it
+	 * can be automatically restored when they log in again.
+	 */
+	virtual void setAuthenticatedTrust(const QString &username, bool trusted) = 0;
+
+	/**
 	 * @brief Is the given name on the list of operators
 	 */
 	virtual bool isOperator(const QString &username) const = 0;
+
+	/**
+	 * @brief Is the given name on the list of trusted users
+	 */
+	virtual bool isTrusted(const QString &username) const = 0;
 
 	/**
 	 * @brief Are there any names on the list of authenticated operators?
@@ -261,7 +294,7 @@ signals:
 protected:
 	virtual void historyAdd(const protocol::MessagePtr &msg) = 0;
 	virtual void historyReset(const QList<protocol::MessagePtr> &newHistory) = 0;
-	virtual void historyAddBan(int id, const QString &username, const QHostAddress &ip, const QString &bannedBy) = 0;
+	virtual void historyAddBan(int id, const QString &username, const QHostAddress &ip, const QString &extAuthId, const QString &bannedBy) = 0;
 	virtual void historyRemoveBan(int id) = 0;
 	void historyLoaded(uint size, int messageCount);
 
@@ -273,6 +306,7 @@ private:
 
 	uint m_sizeInBytes;
 	uint m_sizeLimit;
+	uint m_autoResetBaseSize;
 	int m_firstIndex;
 	int m_lastIndex;
 };

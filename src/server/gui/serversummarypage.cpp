@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2017 Calle Laakkonen
+   Copyright (C) 2017-2019 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -29,6 +29,7 @@
 #include <QGridLayout>
 #include <QBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QCheckBox>
@@ -52,16 +53,28 @@ struct ServerSummaryPage::Private {
 		*port
 		;
 
+	QLineEdit *serverTitle;
 	QDoubleSpinBox *clientTimeout;
 	QCheckBox *allowGuests;
 	QCheckBox *allowGuestHosts;
 
 	QDoubleSpinBox *sessionSizeLimit;
+	QDoubleSpinBox *autoresetTreshold;
 	QDoubleSpinBox *idleTimeout;
 	QSpinBox *maxSessions;
 	QCheckBox *persistence;
 	QCheckBox *privateUserList;
 	QCheckBox *archiveSessions;
+	QSpinBox *logPurge;
+
+	QCheckBox *useExtAuth;
+	QLineEdit *extAuthKey;
+	QLineEdit *extAuthGroup;
+	QCheckBox *extAuthFallback;
+	QCheckBox *extAuthMod;
+
+	QCheckBox *customAvatars;
+	QCheckBox *extAuthAvatars;
 
 	QPushButton *startStopButton;
 	QJsonObject lastUpdate;
@@ -72,15 +85,25 @@ struct ServerSummaryPage::Private {
 		  status(new QLabel),
 		  address(new QLabel),
 		  port(new QLabel),
+		  serverTitle(new QLineEdit),
 		  clientTimeout(new QDoubleSpinBox),
 		  allowGuests(new QCheckBox),
 		  allowGuestHosts(new QCheckBox),
 		  sessionSizeLimit(new QDoubleSpinBox),
+		  autoresetTreshold(new QDoubleSpinBox),
 		  idleTimeout(new QDoubleSpinBox),
 		  maxSessions(new QSpinBox),
 		  persistence(new QCheckBox),
 		  privateUserList(new QCheckBox),
-		  archiveSessions(new QCheckBox)
+		  archiveSessions(new QCheckBox),
+		  logPurge(new QSpinBox),
+		  useExtAuth(new QCheckBox),
+		  extAuthKey(new QLineEdit),
+		  extAuthGroup(new QLineEdit),
+		  extAuthFallback(new QCheckBox),
+		  extAuthMod(new QCheckBox),
+		  customAvatars(new QCheckBox),
+		  extAuthAvatars(new QCheckBox)
 	{
 		clientTimeout->setSuffix(" min");
 		clientTimeout->setSingleStep(0.5);
@@ -90,13 +113,29 @@ struct ServerSummaryPage::Private {
 
 		sessionSizeLimit->setSuffix(" MB");
 		sessionSizeLimit->setSpecialValueText(tr("unlimited"));
+		autoresetTreshold->setSuffix(" MB");
+		autoresetTreshold->setSpecialValueText(tr("none"));
 		idleTimeout->setSuffix(" min");
 		idleTimeout->setSingleStep(1);
 		idleTimeout->setSpecialValueText(tr("unlimited"));
+		idleTimeout->setMaximum(7 * 24 * 60);
+
+		logPurge->setMinimum(0);
+		logPurge->setMaximum(365*10);
+		logPurge->setPrefix("purge older than ");
+		logPurge->setSuffix(tr(" days"));
+		logPurge->setSpecialValueText("keep all");
 
 		persistence->setText(ServerSummaryPage::tr("Allow sessions to persist without users"));
 		privateUserList->setText(ServerSummaryPage::tr("Do not include user list is session announcement"));
 		archiveSessions->setText(ServerSummaryPage::tr("Archive terminated sessions"));
+
+		customAvatars->setText(ServerSummaryPage::tr("Allow custom avatars"));
+
+		useExtAuth->setText(ServerSummaryPage::tr("Enable"));
+		extAuthFallback->setText(ServerSummaryPage::tr("Permit guest logins when ext-auth server is unreachable"));
+		extAuthMod->setText(ServerSummaryPage::tr("Allow ext-auth moderators"));
+		extAuthAvatars->setText(ServerSummaryPage::tr("Use ext-auth avatars"));
 	}
 };
 
@@ -118,6 +157,8 @@ static void addWidgets(struct ServerSummaryPage::Private *d, QGridLayout *layout
 		value->connect(value, SIGNAL(valueChanged(QString)), d->saveTimer, SLOT(start()));
 	else if(value->inherits("QAbstractButton"))
 		value->connect(value, SIGNAL(clicked(bool)), d->saveTimer, SLOT(start()));
+	else if(value->inherits("QLineEdit"))
+		value->connect(value, SIGNAL(textEdited(QString)), d->saveTimer, SLOT(start()));
 }
 
 static void addLabels(QGridLayout *layout, int row, const QString labelText, QLabel *value)
@@ -177,18 +218,33 @@ ServerSummaryPage::ServerSummaryPage(Server *server, QWidget *parent)
 	// Serverwide settings that are adjustable via the API
 	layout->addWidget(new SubheaderWidget(tr("Settings"), 2), row++, 0, 1,	2);
 
+	addWidgets(d, layout, row++, tr("Server Title"), d->serverTitle);
+
 	addWidgets(d, layout, row++, tr("Connection timeout"), d->clientTimeout, true);
 	addWidgets(d, layout, row++, QString(), d->allowGuests);
 	addWidgets(d, layout, row++, QString(), d->allowGuestHosts);
+	addWidgets(d, layout, row++, tr("Server log"), d->logPurge, true);
 
 	layout->addItem(new QSpacerItem(1,10), row++, 0);
 
 	addWidgets(d, layout, row++, tr("Session size limit"), d->sessionSizeLimit, true);
+	addWidgets(d, layout, row++, tr("Default autoreset threshold"), d->autoresetTreshold, true);
 	addWidgets(d, layout, row++, tr("Session idle timeout"), d->idleTimeout, true);
 	addWidgets(d, layout, row++, tr("Maximum sessions"), d->maxSessions, true);
 	addWidgets(d, layout, row++, QString(), d->persistence);
 	addWidgets(d, layout, row++, QString(), d->archiveSessions);
 	addWidgets(d, layout, row++, QString(), d->privateUserList);
+	addWidgets(d, layout, row++, QString(), d->customAvatars);
+
+	layout->addItem(new QSpacerItem(1,10), row++, 0);
+
+	addWidgets(d, layout, row++, tr("External authentication"), d->useExtAuth);
+	addWidgets(d, layout, row++, tr("Validation key"), d->extAuthKey);
+	addWidgets(d, layout, row++, tr("User group"), d->extAuthGroup, true);
+	addWidgets(d, layout, row++, QString(), d->extAuthFallback);
+	addWidgets(d, layout, row++, QString(), d->extAuthMod);
+	addWidgets(d, layout, row++, QString(), d->extAuthAvatars);
+
 
 	layout->addItem(new QSpacerItem(1,1, QSizePolicy::Minimum, QSizePolicy::Expanding), row, 0);
 
@@ -203,7 +259,8 @@ ServerSummaryPage::ServerSummaryPage(Server *server, QWidget *parent)
 
 ServerSummaryPage::~ServerSummaryPage()
 {
-	saveSettings();
+	if(d->saveTimer->isActive())
+		saveSettings();
 	delete d;
 }
 
@@ -244,30 +301,57 @@ void ServerSummaryPage::handleResponse(const QString &requestId, const JsonApiRe
 
 	d->lastUpdate = o;
 
+	d->serverTitle->setText(o[config::ServerTitle.name].toString());
 	d->clientTimeout->setValue(o[config::ClientTimeout.name].toDouble() / 60);
 	d->allowGuests->setChecked(o[config::AllowGuests.name].toBool());
 	d->allowGuestHosts->setChecked(o[config::AllowGuestHosts.name].toBool());
 
 	d->sessionSizeLimit->setValue(o[config::SessionSizeLimit.name].toDouble() / (1024*1024));
+	d->autoresetTreshold->setValue(o[config::AutoresetThreshold.name].toDouble() / (1024*1024));
 	d->idleTimeout->setValue(o[config::IdleTimeLimit.name].toDouble() / 60);
 	d->maxSessions->setValue(o[config::SessionCountLimit.name].toInt());
+	d->logPurge->setValue(o[config::LogPurgeDays.name].toInt());
 	d->persistence->setChecked(o[config::EnablePersistence.name].toBool());
 	d->archiveSessions->setChecked(o[config::ArchiveMode.name].toBool());
 	d->privateUserList->setChecked(o[config::PrivateUserList.name].toBool());
+	d->customAvatars->setChecked(o[config::AllowCustomAvatars.name].toBool());
+
+	d->useExtAuth->setChecked(o[config::UseExtAuth.name].toBool());
+	d->extAuthKey->setText(o[config::ExtAuthKey.name].toString());
+	d->extAuthGroup->setText(o[config::ExtAuthGroup.name].toString());
+	d->extAuthFallback->setChecked(o[config::ExtAuthFallback.name].toBool());
+	d->extAuthMod->setChecked(o[config::ExtAuthMod.name].toBool());
+	d->extAuthAvatars->setChecked(o[config::ExtAuthAvatars.name].toBool());
+	const bool supportsExtAuth = o.contains(config::UseExtAuth.name);
+	d->useExtAuth->setEnabled(supportsExtAuth);
+	d->extAuthGroup->setEnabled(supportsExtAuth);
+	d->extAuthFallback->setEnabled(supportsExtAuth);
+	d->extAuthMod->setEnabled(supportsExtAuth);
+	d->extAuthAvatars->setEnabled(supportsExtAuth);
 }
 
 void ServerSummaryPage::saveSettings()
 {
 	QJsonObject o {
+		{config::ServerTitle.name, d->serverTitle->text()},
 		{config::ClientTimeout.name, int(d->clientTimeout->value() * 60)},
 		{config::AllowGuests.name, d->allowGuests->isChecked()},
 		{config::AllowGuestHosts.name, d->allowGuestHosts->isChecked()},
 		{config::SessionSizeLimit.name, d->sessionSizeLimit->value() * 1024 * 1024},
+		{config::AutoresetThreshold.name, d->autoresetTreshold->value() * 1024 * 1024},
 		{config::IdleTimeLimit.name, d->idleTimeout->value() * 60},
-		{config::SessionCountLimit.name, d->sessionSizeLimit->value()},
+		{config::SessionCountLimit.name, d->maxSessions->value()},
+		{config::LogPurgeDays.name, d->logPurge->value()},
 		{config::EnablePersistence.name, d->persistence->isChecked()},
 		{config::ArchiveMode.name, d->archiveSessions->isChecked()},
-		{config::PrivateUserList.name, d->privateUserList->isChecked()}
+		{config::PrivateUserList.name, d->privateUserList->isChecked()},
+		{config::AllowCustomAvatars.name, d->customAvatars->isChecked()},
+		{config::UseExtAuth.name, d->useExtAuth->isChecked()},
+		{config::ExtAuthKey.name, d->extAuthKey->text()},
+		{config::ExtAuthGroup.name, d->extAuthGroup->text()},
+		{config::ExtAuthFallback.name, d->extAuthFallback->isChecked()},
+		{config::ExtAuthMod.name, d->extAuthMod->isChecked()},
+		{config::ExtAuthAvatars.name, d->extAuthAvatars->isChecked()}
 	};
 
 	QJsonObject update;
@@ -323,6 +407,12 @@ void ServerSummaryPage::showSettingsDialog()
 	ui.port->setValue(cfg.value("port", 27750).toInt());
 	ui.localAddress->setText(cfg.value("local-address").toString());
 
+#ifdef HAVE_LIBSODIUM
+	ui.extAuthUrl->setText(cfg.value("extauth").toString());
+#else
+	ui.extAuthUrl->setEnabled(false);
+#endif
+
 	if(cfg.value("use-ssl", false).toBool()) {
 		if(cfg.value("force-ssl", false).toBool())
 			ui.tlsRequired->setChecked(true);
@@ -341,6 +431,7 @@ void ServerSummaryPage::showSettingsDialog()
 		cfg.setValue("session-storage", ui.storageFile->isChecked() ? "file" : "memory");
 		cfg.setValue("port", ui.port->value());
 		cfg.setValue("local-address", ui.localAddress->text());
+		cfg.setValue("extauth", ui.extAuthUrl->text());
 		cfg.setValue("use-ssl", !ui.tlsOff->isChecked());
 		cfg.setValue("force-ssl", ui.tlsRequired->isChecked());
 		cfg.setValue("sslcert", ui.certFile->text());

@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2008-2017 Calle Laakkonen
+   Copyright (C) 2008-2019 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -206,13 +206,11 @@ void MessageQueue::readData() {
 		int len;
 		while(m_recvbytes >= Message::HEADER_LEN && m_recvbytes >= (len=Message::sniffLength(m_recvbuffer))) {
 			// Whole message received!
-			Message *message = Message::deserialize((const uchar*)m_recvbuffer, m_recvbytes, m_decodeOpaque);
-			if(!message) {
+			NullableMessageRef msg = Message::deserialize((const uchar*)m_recvbuffer, m_recvbytes, m_decodeOpaque);
+			if(msg.isNull()) {
 				emit badData(len, (unsigned char)m_recvbuffer[2], (unsigned char)m_recvbuffer[3]);
 
 			} else {
-				MessagePtr msg(message);
-
 				 if(msg->type() == MSG_PING) {
 					// Special handling for Ping messages
 					bool isPong = msg.cast<Ping>().isPong();
@@ -231,7 +229,7 @@ void MessageQueue::readData() {
 					}
 
 				} else {
-					m_inbox.enqueue(msg);
+					m_inbox.enqueue(MessagePtr::fromNullable(msg));
 					gotmessage = true;
 				}
 			}
@@ -271,47 +269,55 @@ void MessageQueue::dataWritten(qint64 bytes)
 }
 
 void MessageQueue::writeData() {
-	if(m_sendbuflen==0 && !m_outbox.isEmpty()) {
-		// Upload buffer is empty, but there are messages in the outbox
-		Q_ASSERT(m_sentbytes == 0);
+	int sentBatch = 0;
+	bool sendMore = true;
 
-		MessagePtr msg = m_outbox.dequeue();
-		m_sendbuflen = msg->serialize(m_sendbuffer);
-		Q_ASSERT(m_sendbuflen>0);
-		Q_ASSERT(m_sendbuflen <= MAX_BUF_LEN);
+	while(sendMore && sentBatch < 1024*64) {
+		sendMore = false;
+		if(m_sendbuflen==0 && !m_outbox.isEmpty()) {
+			// Upload buffer is empty, but there are messages in the outbox
+			Q_ASSERT(m_sentbytes == 0);
 
-		if(msg->type() == protocol::MSG_DISCONNECT) {
-			// Automatically disconnect after Disconnect notification is sent
-			m_closeWhenReady = true;
-			m_outbox.clear();
+			MessagePtr msg = m_outbox.dequeue();
+			m_sendbuflen = msg->serialize(m_sendbuffer);
+			Q_ASSERT(m_sendbuflen>0);
+			Q_ASSERT(m_sendbuflen <= MAX_BUF_LEN);
+
+			if(msg->type() == protocol::MSG_DISCONNECT) {
+				// Automatically disconnect after Disconnect notification is sent
+				m_closeWhenReady = true;
+				m_outbox.clear();
+			}
 		}
-	}
 
-	if(m_sentbytes < m_sendbuflen) {
+		if(m_sentbytes < m_sendbuflen) {
 #ifndef NDEBUG
-		// Debugging tool: simulate bad network connections by sleeping at odd times
-		if(m_randomlag>0) {
-			QThread::msleep(qrand() % m_randomlag);
-		}
+			// Debugging tool: simulate bad network connections by sleeping at odd times
+			if(m_randomlag>0) {
+				QThread::msleep(qrand() % m_randomlag);
+			}
 #endif
 
-		const int sent = m_socket->write(m_sendbuffer+m_sentbytes, m_sendbuflen-m_sentbytes);
-		if(sent<0) {
-			// Error
-			emit socketError(m_socket->errorString());
-			return;
-		}
-		m_sentbytes += sent;
+			const int sent = m_socket->write(m_sendbuffer+m_sentbytes, m_sendbuflen-m_sentbytes);
+			if(sent<0) {
+				// Error
+				emit socketError(m_socket->errorString());
+				return;
+			}
+			m_sentbytes += sent;
+			sentBatch += sent;
 
-		Q_ASSERT(m_sentbytes <= m_sendbuflen);
-		if(m_sentbytes >= m_sendbuflen) {
-			m_sendbuflen=0;
-			m_sentbytes=0;
-			if(m_closeWhenReady) {
-				m_socket->disconnectFromHost();
+			Q_ASSERT(m_sentbytes <= m_sendbuflen);
+			if(m_sentbytes >= m_sendbuflen) {
+				// Complete message sent
+				m_sendbuflen=0;
+				m_sentbytes=0;
+				if(m_closeWhenReady) {
+					m_socket->disconnectFromHost();
 
-			} else {
-				writeData();
+				} else {
+					sendMore = true;
+				}
 			}
 		}
 	}

@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2006-2017 Calle Laakkonen
+   Copyright (C) 2006-2018 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -18,6 +18,7 @@
 */
 
 #include "canvas/canvasmodel.h"
+#include "canvas/aclfilter.h"
 #include "core/layer.h"
 #include "net/client.h"
 
@@ -33,9 +34,11 @@
 
 namespace tools {
 
-void SelectionTool::begin(const paintcore::Point &point, float zoom)
+void SelectionTool::begin(const paintcore::Point &point, bool right, float zoom)
 {
-	canvas::Selection *sel = owner.model()->selection();
+	Q_UNUSED(right);
+
+	canvas::Selection *sel = m_allowTransform ? owner.model()->selection() : nullptr;
 	if(sel)
 		m_handle = sel->handleAt(point, zoom);
 	else
@@ -53,6 +56,8 @@ void SelectionTool::begin(const paintcore::Point &point, float zoom)
 		sel = new canvas::Selection;
 		initSelection(sel);
 		owner.model()->setSelection(sel);
+	} else {
+		sel->beginAdjustment(m_handle);
 	}
 }
 
@@ -66,9 +71,9 @@ void SelectionTool::motion(const paintcore::Point &point, bool constrain, bool c
 		newSelectionMotion(point, constrain, center);
 
 	} else {
-		QPointF p = point - m_start;
+		const QPointF p = point - m_start;
 
-		if(sel->pasteImage().isNull() && !owner.model()->stateTracker()->isLayerLocked(owner.activeLayer())) {
+		if(sel->pasteImage().isNull() && !owner.model()->aclFilter()->isLayerLocked(owner.activeLayer())) {
 			startMove();
 		}
 
@@ -76,16 +81,21 @@ void SelectionTool::motion(const paintcore::Point &point, bool constrain, bool c
 			// We use the center constraint during translation to rotate the selection
 			const QPointF center = sel->boundingRect().center();
 
-			double a0 = qAtan2(m_start.y() - center.y(), m_start.x() - center.x());
-			double a1 = qAtan2(point.y() - center.y(), point.x() - center.x());
+			if(constrain) {
+				// center+constrain mode: shear
+				sel->adjustShear(p.x() / 100.0, p.y() / 100.0);
 
-			sel->rotate(a1-a0);
+			} else {
+				// just the center: rotate
+				double a0 = qAtan2(m_start.y() - center.y(), m_start.x() - center.x());
+				double a1 = qAtan2(point.y() - center.y(), point.x() - center.x());
+
+				sel->adjustRotation(a1-a0);
+			}
 
 		} else {
-			sel->adjustGeometry(m_handle, p.toPoint(), constrain);
+			sel->adjustGeometry(p.toPoint(), constrain);
 		}
-
-		m_start = point;
 	}
 }
 
@@ -95,30 +105,75 @@ void SelectionTool::end()
 	if(!sel)
 		return;
 
+	// The shape must be closed after the end of the selection operation
+	owner.model()->selection()->closeShape();
+
 	// Remove tiny selections
 	QRectF selrect = sel->boundingRect();
-	if(selrect.width() * selrect.height() <= 2)
+	if(selrect.width() * selrect.height() <= 2) {
 		owner.model()->setSelection(nullptr);
+	} else {
+		// Remove selections completely outside the canvas
+		const QSize cs = owner.model()->layerStack()->size();
+		if(selrect.right() <= 0 || selrect.left() >= cs.width() ||
+				selrect.bottom() <= 0 || selrect.top() >= cs.height()) {
+			owner.model()->setSelection(nullptr);
+		}
+	}
+}
+
+void SelectionTool::finishMultipart()
+{
+	canvas::Selection *sel = owner.model()->selection();
+	if(sel && !sel->pasteImage().isNull()) {
+		owner.client()->sendMessages(sel->pasteOrMoveToCanvas(owner.client()->myId(), owner.activeLayer()));
+		owner.model()->setSelection(nullptr);
+
+	}
+}
+
+void SelectionTool::cancelMultipart()
+{
+	owner.model()->setSelection(nullptr);
+}
+
+
+void SelectionTool::undoMultipart()
+{
+	canvas::Selection *sel = owner.model()->selection();
+	if(sel) {
+		if(sel->isTransformed())
+			sel->reset();
+		else
+			cancelMultipart();
+	}
+}
+
+bool SelectionTool::isMultipart() const
+{
+	return owner.model()->selection() != nullptr;
 }
 
 void SelectionTool::startMove()
 {
 	canvas::Selection *sel = owner.model()->selection();
-	paintcore::Layer *layer = owner.model()->layerStack()->getLayer(owner.activeLayer());
-	if(sel && layer) {
+	auto layers = owner.model()->layerStack()->editor();
+
+	paintcore::EditableLayer layer = layers.getEditableLayer(owner.activeLayer());
+	if(sel && !layer.isNull()) {
 		// Get the selection shape mask (needs to be done before the shape is overwritten by setMoveImage)
-		QPoint offset;
-		QImage eraseMask = sel->shapeMask(Qt::white, &offset);
+		QRect maskBounds;
+		QImage eraseMask = sel->shapeMask(Qt::white, &maskBounds);
 
 		// Copy layer content into move preview buffer.
 		QImage img = owner.model()->selectionToImage(owner.activeLayer());
-		sel->setMoveImage(img);
+		sel->setMoveImage(img, owner.model()->layerStack()->size());
 
 		// The actual canvas pixels aren't touch yet, so we create a temporary sublayer
 		// to erase the selected region.
-		layer->removeSublayer(-1);
-		paintcore::Layer *tmplayer = layer->getSubLayer(-1, paintcore::BlendMode::MODE_ERASE, 255);
-		tmplayer->putImage(offset.x(), offset.y(), eraseMask, paintcore::BlendMode::MODE_REPLACE);
+		layer.removeSublayer(-1);
+		auto tmplayer = layer.getEditableSubLayer(-1, paintcore::BlendMode::MODE_ERASE, 255);
+		tmplayer.putImage(maskBounds.left(), maskBounds.top(), eraseMask, paintcore::BlendMode::MODE_REPLACE);
 	}
 }
 
@@ -168,14 +223,6 @@ void PolygonSelection::newSelectionMotion(const paintcore::Point &point, bool co
 	owner.model()->selection()->addPointToShape(point);
 }
 
-void PolygonSelection::end()
-{
-	if(owner.model()->selection())
-		owner.model()->selection()->closeShape();
-
-	SelectionTool::end();
-}
-
 QImage SelectionTool::transformSelectionImage(const QImage &source, const QPolygon &target, QPoint *offset)
 {
 	Q_ASSERT(!source.isNull());
@@ -199,7 +246,7 @@ QImage SelectionTool::transformSelectionImage(const QImage &source, const QPolyg
 	if(offset)
 		*offset = bounds.topLeft();
 
-	QImage out(bounds.size(), QImage::Format_ARGB32);
+	QImage out(bounds.size(), QImage::Format_ARGB32_Premultiplied);
 	out.fill(0);
 	QPainter painter(&out);
 	painter.setRenderHint(QPainter::SmoothPixmapTransform);
@@ -209,20 +256,21 @@ QImage SelectionTool::transformSelectionImage(const QImage &source, const QPolyg
 	return out;
 }
 
-QImage SelectionTool::shapeMask(const QColor &color, const QPolygon &selection, QPoint *offset, bool mono)
+QImage SelectionTool::shapeMask(const QColor &color, const QPolygonF &selection, QRect *maskBounds, bool mono)
 {
-	const QRect b = selection.boundingRect();
-	const QPolygon p = selection.translated(-b.topLeft());
+	const QRectF bf = selection.boundingRect();
+	const QRect b = bf.toRect();
+	const QPolygonF p = selection.translated(-bf.topLeft());
 
-	QImage mask(b.size(), mono ? QImage::Format_Mono : QImage::Format_ARGB32);
-	mask.fill(0);
+	QImage mask(b.size(), mono ? QImage::Format_Mono : QImage::Format_ARGB32_Premultiplied);
+	memset(mask.bits(), 0, mask.byteCount()); // note: apparently image.fill() does not set every byte for monochrome images
 	QPainter painter(&mask);
 	painter.setPen(Qt::NoPen);
 	painter.setBrush(color);
 	painter.drawPolygon(p);
 
-	if(offset)
-		*offset = b.topLeft();
+	if(maskBounds)
+		*maskBounds = b;
 
 	return mask;
 }

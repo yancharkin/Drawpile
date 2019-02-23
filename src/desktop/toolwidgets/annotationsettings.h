@@ -33,17 +33,19 @@ namespace tools {
  * The annotation tool is special because it is used to manipulate
  * annotation objects rather than pixel data.
  */
-class AnnotationSettings : public QObject, public ToolSettings {
+class AnnotationSettings : public ToolSettings {
 Q_OBJECT
 public:
-	AnnotationSettings(QString name, QString title, ToolController *ctrl);
+	AnnotationSettings(ToolController *ctrl, QObject *parent=nullptr);
 	~AnnotationSettings();
+
+	QString toolType() const override { return QStringLiteral("annotation"); }
 
 	/**
 	 * @brief Get the ID of the currently selected annotation
 	 * @return ID or 0 if none selected
 	 */
-	int selected() const { return m_selectionId; }
+	uint16_t selected() const { return m_selectionId; }
 
 	/**
 	 * @brief Focus content editing box and set cursor position
@@ -51,15 +53,14 @@ public:
 	 */
 	void setFocusAt(int cursorPos);
 
-	tools::Tool::Type toolType() const override { return tools::Tool::ANNOTATION; }
-	virtual void setForeground(const QColor &) override {}
-	virtual void quickAdjust1(float) override {}
-	virtual int getSize() const override { return 0; }
-	virtual bool getSubpixelMode() const { return false; }
+	void setForeground(const QColor &) override {}
+	void quickAdjust1(float) override {}
+	int getSize() const override { return 0; }
+	bool getSubpixelMode() const override { return false; }
 
 public slots:
 	//! Set the currently selected annotation item
-	void setSelectionId(int id);
+	void setSelectionId(uint16_t id);
 
 	//! Focus the content editing box
 	void setFocus();
@@ -79,7 +80,7 @@ private slots:
 	void updateFontIfUniform();
 
 protected:
-	virtual QWidget *createUiWidget(QWidget *parent);
+	QWidget *createUiWidget(QWidget *parent) override;
 
 private:
 	void resetContentFont(bool resetFamily, bool resetSize, bool resetColor);
@@ -87,7 +88,7 @@ private:
 
 	Ui_TextSettings *_ui;
 
-	int m_selectionId;
+	uint16_t m_selectionId;
 
 	bool m_noupdate;
 	QTimer *m_updatetimer;

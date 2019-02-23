@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2013-2017 Calle Laakkonen
+   Copyright (C) 2013-2018 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -52,9 +52,11 @@ struct ServerReply {
 		RESULT,  // comand result
 		LOG,     // server log message
 		SESSIONCONF, // session configuration update
-		SIZELIMITWARNING, // session history size nearing limit
+		SIZELIMITWARNING, // session history size nearing limit (deprecated)
+		STATUS,  // Periodic status update
 		RESET,   // session reset state
-		CATCHUP  // number of messages queued for upload (use for progress bars)
+		CATCHUP,  // number of messages queued for upload (use for progress bars)
+		RESETREQUEST // request client to perform a reset
 	} type;
 	QString message;
 	QJsonObject reply;
@@ -82,6 +84,9 @@ public:
 
 	//! Convenience function: make an ERROR type reply message
 	static MessagePtr error(const QString &message);
+
+	//! Check is message payload is too big to be sent
+	bool isOversize() const { return m_msg.length() > 0xffff; }
 
 	QJsonDocument doc() const;
 	ServerCommand cmd() const { return ServerCommand::fromJson(doc()); }
@@ -135,8 +140,8 @@ public:
 	QString messageName() const override { return QStringLiteral("disconnect"); }
 
 protected:
-	int payloadLength() const;
-	int serializePayload(uchar *data) const;
+	int payloadLength() const override;
+	int serializePayload(uchar *data) const override;
 	Kwargs kwargs() const override { return Kwargs(); }
 
 private:
@@ -164,8 +169,8 @@ public:
 	QString messageName() const override { return m_isPong ? QStringLiteral("pong") : QStringLiteral("ping"); }
 
 protected:
-	int payloadLength() const;
-	int serializePayload(uchar *data) const;
+	int payloadLength() const override;
+	int serializePayload(uchar *data) const override;
 	Kwargs kwargs() const override { return Kwargs(); }
 
 private:

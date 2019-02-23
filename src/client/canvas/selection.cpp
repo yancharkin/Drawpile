@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2015-2017 Calle Laakkonen
+   Copyright (C) 2015-2018 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -25,21 +25,32 @@
 #include "../shared/net/image.h"
 
 #include <QPainter>
+#include <cmath>
 
 namespace canvas {
 
 Selection::Selection(QObject *parent)
-	: QObject(parent), m_closedPolygon(false), m_moveRegion(false)
+	: QObject(parent), m_closedPolygon(false)
 {
 
 }
 
 void Selection::saveShape()
 {
-	const QPointF center = m_shape.boundingRect().center();
-	m_originalShape.clear();
-	for(const QPointF &p : m_shape)
-		m_originalShape << p - center;
+	m_originalCenter = m_shape.boundingRect().center();
+	m_originalShape = m_shape;
+}
+
+
+bool Selection::isTransformed() const
+{
+	return m_shape != m_originalShape;
+}
+
+void Selection::reset()
+{
+	m_shape = m_originalShape;
+	emit shapeChanged(m_shape);
 }
 
 void Selection::resetShape()
@@ -47,7 +58,7 @@ void Selection::resetShape()
 	const QPointF center = m_shape.boundingRect().center();
 	m_shape.clear();
 	for(const QPointF &p : m_originalShape)
-		m_shape << p + center;
+		m_shape << p + center - m_originalCenter;
 
 	emit shapeChanged(m_shape);
 }
@@ -55,6 +66,7 @@ void Selection::resetShape()
 void Selection::setShape(const QPolygonF &shape)
 {
 	m_shape = shape;
+	beginAdjustment(OUTSIDE);
 	emit shapeChanged(shape);
 }
 
@@ -66,8 +78,10 @@ void Selection::setShapeRect(const QRect &rect)
 		QPointF(rect.left() + rect.width(), rect.top() + rect.height()),
 		QPointF(rect.left(), rect.top() + rect.height())
 	}));
+	saveShape();
 	m_closedPolygon = true;
 }
+
 
 void Selection::translate(const QPoint &offset)
 {
@@ -93,29 +107,11 @@ void Selection::scale(qreal x, qreal y)
 	emit shapeChanged(m_shape);
 }
 
-void Selection::rotate(float angle)
-{
-	if(qAbs(angle) < 0.0001)
-		return;
-
-	const QPointF origin = m_shape.boundingRect().center();
-	QTransform t;
-	t.translate(origin.x(), origin.y());
-	t.rotateRadians(angle);
-
-	for(int i=0;i<m_shape.size();++i) {
-		QPointF p = m_shape[i] - origin;
-		m_shape[i] = t.map(p);
-	}
-
-	emit shapeChanged(m_shape);
-}
-
 Selection::Handle Selection::handleAt(const QPointF &point, float zoom) const
 {
 	const qreal H = handleSize() / zoom;
 
-	const QRectF R = m_shape.boundingRect();
+	const QRectF R = m_shape.boundingRect().adjusted(-H/2, -H/2, H/2, H/2);
 
 	if(!R.contains(point))
 		return OUTSIDE;
@@ -142,59 +138,116 @@ Selection::Handle Selection::handleAt(const QPointF &point, float zoom) const
 	return TRANSLATE;
 }
 
+void Selection::beginAdjustment(Handle handle)
+{
+	m_adjustmentHandle = handle;
+	m_preAdjustmentShape = m_shape;
+}
 
-void Selection::adjustGeometry(Handle handle, const QPoint &delta, bool keepAspect)
+void Selection::adjustGeometry(const QPoint &delta, bool keepAspect)
 {
 	if(keepAspect) {
 		const int dxy = (qAbs(delta.x()) > qAbs(delta.y())) ? delta.x() : delta.y();
-		const int dxy2 = (qAbs(delta.x()) > qAbs(-delta.y())) ? delta.x() : -delta.y();
-		switch(handle) {
+
+		const QRectF bounds = m_preAdjustmentShape.boundingRect();
+		const qreal aspect = bounds.width() / bounds.height();
+		const int dx = dxy * aspect;
+		const int dy = dxy;
+
+		switch(m_adjustmentHandle) {
 		case OUTSIDE: return;
-		case TRANSLATE: m_shape.translate(delta); break;
+		case TRANSLATE: m_shape = m_preAdjustmentShape.translated(delta); break;
 
-		case RS_TOPLEFT: adjust(dxy, dxy, 0, 0); break;
-		case RS_TOPRIGHT: adjust(0, -dxy2, dxy2, 0); break;
-		case RS_BOTTOMRIGHT: adjust(0, 0, dxy, dxy); break;
-		case RS_BOTTOMLEFT: adjust(dxy2, 0, 0, -dxy2); break;
+		case RS_TOPLEFT: adjustScale(dx, dy, 0, 0); break;
+		case RS_TOPRIGHT: adjustScale(0, -dx, dy, 0); break;
+		case RS_BOTTOMRIGHT: adjustScale(0, 0, dx, dy); break;
+		case RS_BOTTOMLEFT: adjustScale(dx, 0, 0, -dy); break;
 
-		case RS_TOP: adjust(delta.y(), delta.y(), -delta.y(), -delta.y()); break;
-		case RS_RIGHT: adjust(-delta.x(), -delta.x(), delta.x(), delta.x()); break;
-		case RS_BOTTOM: adjust(-delta.y(), -delta.y(), delta.y(), delta.y()); break;
-		case RS_LEFT: adjust(delta.x(), delta.x(), -delta.x(), -delta.x()); break;
+		case RS_TOP:
+		case RS_LEFT: adjustScale(dx, dy, -dx, -dy); break;
+		case RS_RIGHT:
+		case RS_BOTTOM: adjustScale(-dx, -dy, dx, dy); break;
 		}
 	} else {
-		switch(handle) {
+		switch(m_adjustmentHandle) {
 		case OUTSIDE: return;
-		case TRANSLATE: m_shape.translate(delta); break;
-		case RS_TOPLEFT: adjust(delta.x(), delta.y(), 0, 0); break;
-		case RS_TOPRIGHT: adjust(0, delta.y(), delta.x(), 0); break;
-		case RS_BOTTOMRIGHT: adjust(0, 0, delta.x(), delta.y()); break;
-		case RS_BOTTOMLEFT: adjust(delta.x(), 0, 0, delta.y()); break;
-		case RS_TOP: adjust(0, delta.y(), 0, 0); break;
-		case RS_RIGHT: adjust(0, 0, delta.x(), 0); break;
-		case RS_BOTTOM: adjust(0, 0, 0, delta.y()); break;
-		case RS_LEFT: adjust(delta.x(), 0, 0, 0); break;
+		case TRANSLATE: m_shape = m_preAdjustmentShape.translated(delta); break;
+		case RS_TOPLEFT: adjustScale(delta.x(), delta.y(), 0, 0); break;
+		case RS_TOPRIGHT: adjustScale(0, delta.y(), delta.x(), 0); break;
+		case RS_BOTTOMRIGHT: adjustScale(0, 0, delta.x(), delta.y()); break;
+		case RS_BOTTOMLEFT: adjustScale(delta.x(), 0, 0, delta.y()); break;
+		case RS_TOP: adjustScale(0, delta.y(), 0, 0); break;
+		case RS_RIGHT: adjustScale(0, 0, delta.x(), 0); break;
+		case RS_BOTTOM: adjustScale(0, 0, 0, delta.y()); break;
+		case RS_LEFT: adjustScale(delta.x(), 0, 0, 0); break;
 		}
 	}
 
 	emit shapeChanged(m_shape);
 }
 
-void Selection::adjust(int dx1, int dy1, int dx2, int dy2)
+void Selection::adjustScale(int dx1, int dy1, int dx2, int dy2)
 {
-	const QRectF bounds = m_shape.boundingRect();
+	Q_ASSERT(m_preAdjustmentShape.size() == m_shape.size());
+
+	const QRectF bounds = m_preAdjustmentShape.boundingRect();
 
 	const qreal sx = (bounds.width() - dx1 + dx2) / bounds.width();
 	const qreal sy = (bounds.height() - dy1 + dy2) / bounds.height();
 
-	for(int i=0;i<m_shape.size();++i) {
+	for(int i=0;i<m_preAdjustmentShape.size();++i) {
 		m_shape[i] = QPointF(
-			bounds.x() + (m_shape[i].x() - bounds.x()) * sx + dx1,
-			bounds.y() + (m_shape[i].y() - bounds.y()) * sy + dy1
+			bounds.x() + (m_preAdjustmentShape[i].x() - bounds.x()) * sx + dx1,
+			bounds.y() + (m_preAdjustmentShape[i].y() - bounds.y()) * sy + dy1
 		);
+		if(std::isnan(m_shape[i].x()) || std::isnan(m_shape[i].y())) {
+			qWarning("Selection shape[%d] is Not a Number!", i);
+			m_shape = m_preAdjustmentShape;
+			return;
+		}
 	}
+}
+
+void Selection::adjustRotation(float angle)
+{
+	Q_ASSERT(m_preAdjustmentShape.size() == m_shape.size());
+
+	if(qAbs(angle) < 0.0001)
+		return;
+
+	const QPointF origin = m_preAdjustmentShape.boundingRect().center();
+	QTransform t;
+	t.translate(origin.x(), origin.y());
+	t.rotateRadians(angle);
+
+	for(int i=0;i<m_shape.size();++i) {
+		const QPointF p = m_preAdjustmentShape[i] - origin;
+		m_shape[i] = t.map(p);
+	}
+
 	emit shapeChanged(m_shape);
 }
+
+void Selection::adjustShear(float sh, float sv)
+{
+	Q_ASSERT(m_preAdjustmentShape.size() == m_shape.size());
+
+	if(qAbs(sh) < 0.0001 && qAbs(sv) < 0.0001)
+		return;
+
+	const QPointF origin = m_preAdjustmentShape.boundingRect().center();
+	QTransform t;
+	t.translate(origin.x(), origin.y());
+	t.shear(sh, sv);
+
+	for(int i=0;i<m_shape.size();++i) {
+		const QPointF p = m_preAdjustmentShape[i] - origin;
+		m_shape[i] = t.map(p);
+	}
+
+	emit shapeChanged(m_shape);
+}
+
 
 void Selection::addPointToShape(const QPointF &point)
 {
@@ -255,20 +308,26 @@ bool Selection::isAxisAlignedRectangle() const
 	return canvas::isAxisAlignedRectangle(m_shape.toPolygon());
 }
 
-QImage Selection::shapeMask(const QColor &color, QPoint *offset) const
+QImage Selection::shapeMask(const QColor &color, QRect *maskBounds) const
 {
-	return tools::SelectionTool::shapeMask(color, m_shape.toPolygon(), offset);
+	return tools::SelectionTool::shapeMask(color, m_shape, maskBounds);
 }
 
 void Selection::setPasteImage(const QImage &image)
 {
-	m_moveRegion = QPolygon();
+	m_moveRegion = QPolygonF();
 	setPasteOrMoveImage(image);
 }
 
-void Selection::setMoveImage(const QImage &image)
+void Selection::setMoveImage(const QImage &image, const QSize &canvasSize)
 {
-	m_moveRegion = m_shape.toPolygon();
+	m_moveRegion = m_shape;
+
+	for(QPointF &p : m_moveRegion) {
+		p.setX(qBound(0.0, p.x(), qreal(canvasSize.width())));
+		p.setY(qBound(0.0, p.y(), qreal(canvasSize.height())));
+	}
+
 	setPasteOrMoveImage(image);
 }
 
@@ -304,11 +363,14 @@ QList<protocol::MessagePtr> Selection::pasteOrMoveToCanvas(uint8_t contextId, in
 	if(!m_moveRegion.isEmpty()) {
 		qDebug("Moving instead of pasting");
 		// Get source pixel mask
-		const QRect moveBounds = m_moveRegion.boundingRect();
+		QRect moveBounds;
 		QByteArray mask;
-		if(!canvas::isAxisAlignedRectangle(m_moveRegion)) {
-			QImage maskimg = tools::SelectionTool::shapeMask(Qt::white, m_moveRegion, nullptr, true);
-			mask = qCompress(QByteArray::fromRawData(reinterpret_cast<const char*>(maskimg.constBits()), maskimg.byteCount()));
+
+		if(!canvas::isAxisAlignedRectangle(m_moveRegion.toPolygon())) {
+			QImage maskimg = tools::SelectionTool::shapeMask(Qt::white, m_moveRegion, &moveBounds, true);
+			mask = qCompress(maskimg.constBits(), maskimg.byteCount());
+		} else {
+			moveBounds = m_moveRegion.boundingRect().toRect();
 		}
 
 		// Send move command
@@ -337,12 +399,12 @@ QList<protocol::MessagePtr> Selection::fillCanvas(uint8_t contextId, const QColo
 {
 	QRect area;
 	QImage mask;
-	QPoint maskOffset;
+	QRect maskBounds;
 
 	if(isAxisAlignedRectangle())
 		area = boundingRect();
 	else
-		mask = shapeMask(color, &maskOffset);
+		mask = shapeMask(color, &maskBounds);
 
 	QList<protocol::MessagePtr> msgs;
 
@@ -350,7 +412,7 @@ QList<protocol::MessagePtr> Selection::fillCanvas(uint8_t contextId, const QColo
 		if(mask.isNull())
 			msgs << protocol::MessagePtr(new protocol::FillRect(contextId, layer, int(mode), area.x(), area.y(), area.width(), area.height(), color.rgba()));
 		else
-			msgs << net::command::putQImage(contextId, layer, maskOffset.x(), maskOffset.y(), mask, mode);
+			msgs << net::command::putQImage(contextId, layer, maskBounds.left(), maskBounds.top(), mask, mode);
 	}
 
 	if(!msgs.isEmpty())

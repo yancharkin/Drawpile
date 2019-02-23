@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2006-2015 Calle Laakkonen
+   Copyright (C) 2006-2019 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -23,36 +23,49 @@
 
 class Ui_JoinDialog;
 
+class ServerDiscoveryModel;
+class SessionListingModel;
+class SessionFilterProxyModel;
+
 namespace dialogs {
 
 class JoinDialog : public QDialog
 {
 	Q_OBJECT
 public:
-	explicit JoinDialog(const QUrl &defaultUrl, QWidget *parent=0);
+	explicit JoinDialog(const QUrl &defaultUrl, QWidget *parent=nullptr);
 	~JoinDialog();
 
 	//! Get the host address
 	QString getAddress() const;
 
-	//! Get the username
-	QString getUserName() const;
-
-	//! Should the session be recorded from the beginning
-	bool recordSession() const;
-
 	//! Get the join parameters encoded as an URL
 	QUrl getUrl() const;
+
+	//! Get the selected recording filename (empty if not selected)
+	QString autoRecordFilename() const;
+
+	//! Restore settings from configuration file
+	void restoreSettings();
 
 	//! Store settings in configuration file
 	void rememberSettings() const;
 
 private slots:
-	void showListingDialog();
-	void setUrl(const QUrl &url);
+	void addressChanged(const QString &addr);
+	void refreshListing();
+	void recordingToggled(bool checked);
 
 private:
-	Ui_JoinDialog *_ui;
+	void resolveRoomcode(const QString &roomcode, const QStringList &servers);
+	void setListingError(const QString &message);
+
+	Ui_JoinDialog *m_ui;
+	SessionFilterProxyModel *m_filteredSessions;
+	SessionListingModel *m_sessions;
+	ServerDiscoveryModel *m_localServers;
+
+	QString m_recordingFilename;
 };
 
 }

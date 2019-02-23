@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2007-2014 Calle Laakkonen
+   Copyright (C) 2007-2018 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -35,6 +35,7 @@ public:
 public slots:
 	void setColor(const QColor& color);
 	void addLastUsedColor(const QColor &color);
+	void swapLastUsedColors();
 
 signals:
 	void colorChanged(const QColor& color);
@@ -46,6 +47,8 @@ private slots:
 	void copyPalette();
 	void deletePalette();
 	void toggleWriteProtect();
+	void exportPalette();
+	void importPalette();
 
 	void updateFromRgbSliders();
 	void updateFromRgbSpinbox();
@@ -54,12 +57,15 @@ private slots:
 
 private:
 	Ui_ColorBox *_ui;
-	Palette *_lastused;
+	Palette *m_lastused;
+	Palette *m_lastusedAlt;
+	QColor m_altColor;
 
-	QAction *_deletePalette;
-	QAction *_writeprotectPalette;
+	QAction *m_deletePalette;
+	QAction *m_writeprotectPalette;
+	QAction *m_exportPalette;
+	QAction *m_importPalette;
 	bool _updating;
-
 };
 
 }

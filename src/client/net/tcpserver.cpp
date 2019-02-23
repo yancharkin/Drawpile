@@ -49,7 +49,7 @@ TcpServer::TcpServer(QObject *parent) :
 
 	connect(m_socket, &QSslSocket::disconnected, this, &TcpServer::handleDisconnect);
 	connect(m_socket, static_cast<void(QTcpSocket::*)(QAbstractSocket::SocketError)>(&QTcpSocket::error), this, &TcpServer::handleSocketError);
-	connect(m_socket, &QSslSocket::stateChanged, [this](QAbstractSocket::SocketState state) {
+	connect(m_socket, &QSslSocket::stateChanged, this, [this](QAbstractSocket::SocketState state) {
 		if(state==QAbstractSocket::ClosingState)
 			emit loggingOut();
 	});
@@ -149,8 +149,15 @@ void TcpServer::loginSuccess()
 	qDebug() << "logged in to session" << m_loginstate->sessionId() << ". Got user id" << m_loginstate->userId();
 
 	m_supportsPersistence = m_loginstate->supportsPersistence();
+	m_supportsAbuseReports = m_loginstate->supportsAbuseReports();
 
-	emit loggedIn(m_loginstate->sessionId(), m_loginstate->userId(), m_loginstate->mode() == LoginHandler::JOIN);
+	emit loggedIn(
+		m_loginstate->sessionId(),
+		m_loginstate->userId(),
+		m_loginstate->mode() == LoginHandler::JOIN,
+		m_loginstate->isAuthenticated(),
+		m_loginstate->hasUserFlag("MOD")
+		);
 
 	m_loginstate->deleteLater();
 	m_loginstate = nullptr;

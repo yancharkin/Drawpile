@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2013-2017 Calle Laakkonen
+   Copyright (C) 2013-2019 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -23,6 +23,7 @@
 
 #include <QObject>
 #include <QStringList>
+#include <QByteArray>
 
 namespace protocol {
 	struct ServerCommand;
@@ -49,8 +50,8 @@ struct SessionDescription;
  * C: STARTTLS (if "TLS" is in FEATURES)
  * S: STARTTLS (starts SSL handshake)
  *
- * C: IDENT username and password
- * S: IDENTIFIED OK or NEED PASSWORD or ERROR
+ * C: IDENT username and password (or) IDENT extauth
+ * S: IDENTIFIED OK or NEED PASSWORD, NEED EXTAUTH or ERROR
  *
  * S: SESSION LIST UPDATES
  *
@@ -106,15 +107,20 @@ private:
 	void handleIdentMessage(const protocol::ServerCommand &cmd);
 	void handleHostMessage(const protocol::ServerCommand &cmd);
 	void handleJoinMessage(const protocol::ServerCommand &cmd);
+	void handleAbuseReport(const protocol::ServerCommand &cmd);
 	void handleStarttls();
+	void requestExtAuth();
 	void guestLogin(const QString &username);
-	void send(const protocol::ServerReply &cmd);
+	void authLoginOk(const QString &username, const QString &extAuthId, const QJsonArray &flags, const QByteArray &avatar, bool allowMod);
+	bool send(const protocol::ServerReply &cmd);
 	void sendError(const QString &code, const QString &message);
+	void extAuthGuestLogin(const QString &username);
 
 	Client *m_client;
 	SessionServer *m_server;
 
 	State m_state;
+	quint64 m_extauth_nonce;
 	bool m_hostPrivilege;
 	bool m_complete;
 };

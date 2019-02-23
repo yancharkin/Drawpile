@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2013-2017 Calle Laakkonen
+   Copyright (C) 2013-2019 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -25,10 +25,12 @@
 #include <QString>
 #include <QObject>
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QUuid>
 #include <QJsonObject>
 
 #include "../util/announcementapi.h"
+#include "../util/passwordhash.h"
 #include "../net/message.h"
 #include "../net/protover.h"
 #include "sessionhistory.h"
@@ -44,6 +46,7 @@ namespace server {
 
 class Client;
 class ServerConfig;
+class Log;
 
 /**
  * The serverside session state.
@@ -58,7 +61,7 @@ public:
 		Shutdown
 	};
 
-	Session(SessionHistory *history, ServerConfig *config, QObject *parent=0);
+	Session(SessionHistory *history, ServerConfig *config, QObject *parent=nullptr);
 
 	const ServerConfig *config() const { return m_config; }
 
@@ -109,6 +112,13 @@ public:
 	bool isNsfm() const { return m_history->flags().testFlag(SessionHistory::Nsfm); }
 
 	/**
+	 * @brief Are trusted users deputized?
+	 *
+	 * If true, trusted users are granted limited access to kick/ban commands.
+	 */
+	bool isDeputies() const { return m_history->flags().testFlag(SessionHistory::Deputies); }
+
+	/**
 	 * @brief Set the name of the recording file to create
 	 *
 	 * The recording will be created after a snapshot point has been created.
@@ -130,7 +140,7 @@ public:
 	 * @brief Set the session password.
 	 * @param password
 	 */
-	void setPassword(const QString &password) { m_history->setPassword(password); }
+	void setPassword(const QString &password) { m_history->setPasswordHash(passwordhash::hash(password)); }
 
 	/**
 	 * @brief Check if the password is OK
@@ -161,6 +171,12 @@ public:
 	 */
 	bool isClosed() const { return m_closed || userCount() >= maxUsers() || (m_state != Initialization && m_state != Running); }
 	void setClosed(bool closed);
+
+	/**
+	 * @brief Is the session open to authenticated users only?
+	 */
+	bool isAuthOnly() const { return m_authOnly; }
+	void setAuthOnly(bool authOnly);
 
 	/**
 	 * @brief Get the maximum number of users allowed in the session
@@ -271,9 +287,9 @@ public:
 
 	/**
 	 * @brief Get the time of the last join/logout event
-	 * @return timestamp
+	 * @return milliseconds since last event
 	 */
-	const QDateTime &lastEventTime() const { return m_lastEventTime; }
+	qint64 lastEventTime() const { return m_lastEventTime.elapsed(); }
 
 	/**
 	 * @brief Get the session history
@@ -335,8 +351,9 @@ public:
 	 * @brief Generate a request for session announcement
 	 *
 	 * @param url listing server API url
+	 * @param privateListing make this a private listing?
 	 */
-	void makeAnnouncement(const QUrl &url);
+	void makeAnnouncement(const QUrl &url, bool privateListing);
 
 	/**
 	 * @brief Generate a request for session announcement unlisting
@@ -349,18 +366,31 @@ public:
 	//! Get the session state
 	State state() const { return m_state; }
 
+	void readyToAutoReset(int ctxId);
+	void handleInitBegin(int ctxId);
 	void handleInitComplete(int ctxId);
+	void handleInitCancel(int ctxId);
 
 	/**
 	 * @brief Update session operator bits
 	 *
 	 * Generates log entries for each change
 	 *
-	 * @param ids lisf of new session operators
+	 * @param ids new list of session operators
 	 * @param changedBy name of the user who issued the change command
 	 * @return sanitized list of actual session operators
 	 */
-	QList<uint8_t> updateOwnership(QList<uint8_t> ids, const QString &chanedBy);
+	QList<uint8_t> updateOwnership(QList<uint8_t> ids, const QString &changedBy);
+
+	/**
+	 * @brief Update the list of trusted users
+	 *
+	 * Generates log entries for each change
+	 * @param ids new list of trusted users
+	 * @param changedBy name of the user who issued the change command
+	 * @return sanitized list of actual trusted users
+	 */
+	QList<uint8_t> updateTrustedUsers(QList<uint8_t> ids, const QString &changedBy);
 
 	/**
 	 * @brief Grant or revoke OP status of a user
@@ -369,6 +399,14 @@ public:
 	 * @param changedBy name of the user who issued the command
 	 */
 	void changeOpStatus(int id, bool op, const QString &changedBy);
+
+	/**
+	 * @brief Grant or revoke trusted status of a user
+	 * @param id user ID
+	 * @param trusted new status
+	 * @param changedBy name of the user who issued the command
+	 */
+	void changeTrustedStatus(int id, bool trusted, const QString &changedBy);
 
 	//! Send refreshed ban list to all logged in users
 	void sendUpdatedBanlist();
@@ -381,6 +419,17 @@ public:
 
 	//! Release caches that can be released
 	void historyCacheCleanup();
+
+	/**
+	 * @brief Send an abuse report
+	 *
+	 * A reporting backend server must have been configured.
+	 *
+	 * @param reporter the user who is making the report
+	 * @param aboutUser the ID of the user this report is about (if 0, the report is about the session in general)
+	 * @param message freeform message entered by the reporter
+	 */
+	void sendAbuseReport(const Client *reporter, int aboutUser, const QString &message);
 
 	/**
 	 * @brief Get a JSON object describing the session
@@ -437,22 +486,21 @@ private slots:
 	void removeUser(Client *user);
 
 	void refreshAnnouncements();
-	void sessionAnnounced(const sessionlisting::Announcement &announcement);
-	void sessionAnnouncementError(const QString &apiUrl, const QString &message);
 
 private:
-	sessionlisting::AnnouncementApi *publicListingClient();
-
 	void cleanupCommandStream();
 
 	void restartRecording();
 	void stopRecording();
-
+	void abortReset();
 
 	void sendUpdatedSessionProperties();
+	void sendStatusUpdate();
 	void ensureOperatorExists();
 
 	void switchState(State newstate);
+
+	JsonApiResult callListingsJsonApi(JsonApiMethod method, const QStringList &path, const QJsonObject &request);
 
 	ServerConfig *m_config;
 
@@ -467,16 +515,16 @@ private:
 	SessionHistory *m_history;
 	QList<protocol::MessagePtr> m_resetstream;
 	uint m_resetstreamsize;
-	uint m_historyLimitWarning;
 
 	QList<sessionlisting::Announcement> m_publicListings;
-	sessionlisting::AnnouncementApi *m_publicListingClient;
 	QTimer *m_refreshTimer;
 
-	QDateTime m_lastEventTime;
+	QElapsedTimer m_lastEventTime;
+	QElapsedTimer m_lastStatusUpdate;
 
 	bool m_closed;
-	bool m_historyLimitWarningSent;
+	bool m_authOnly;
+	enum class AutoResetState { NotSent, Queried, Requested} m_autoResetRequestStatus;
 };
 
 }

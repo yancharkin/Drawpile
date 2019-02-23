@@ -46,7 +46,7 @@ public:
 	void sendMessage(const protocol::MessagePtr &msg) override;
 	void sendMessages(const QList<protocol::MessagePtr> &msg) override;
 
-	bool isLoggedIn() const { return m_loginstate == nullptr; }
+	bool isLoggedIn() const override { return m_loginstate == nullptr; }
 
 	int uploadQueueBytes() const override;
 
@@ -56,11 +56,12 @@ public:
 	QSslCertificate hostCertificate() const override;
 
 	bool supportsPersistence() const override { return m_supportsPersistence; }
+	bool supportsAbuseReports() const override { return m_supportsAbuseReports; }
 
 	QUrl url() const { return m_url; }
 
 signals:
-	void loggedIn(const QString &sessionId, int userid, bool join);
+	void loggedIn(const QString &sessionId, uint8_t userid, bool join, bool auth, bool moderator);
 	void loggingOut();
 	void serverDisconnected(const QString &message, const QString &errorcode, bool localDisconnect);
 
@@ -88,6 +89,7 @@ private:
 	Security m_securityLevel;
 	bool m_localDisconnect;
 	bool m_supportsPersistence;
+	bool m_supportsAbuseReports;
 };
 
 }

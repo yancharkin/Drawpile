@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2015 Calle Laakkonen
+   Copyright (C) 2015-2018 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -20,8 +20,6 @@
 #ifndef CANVASMODEL_H
 #define CANVASMODEL_H
 
-#include <QObject>
-
 #include "../shared/net/message.h"
 
 // note: we must include these so the datatypes get registered properly for use in QML
@@ -29,6 +27,10 @@
 #include "lasertrailmodel.h"
 #include "selection.h"
 #include "core/layerstack.h"
+#include "../shared/record/writer.h"
+
+#include <QObject>
+#include <QPointer>
 
 namespace protocol {
 	class UserJoin;
@@ -56,11 +58,12 @@ class CanvasModel : public QObject
 	Q_PROPERTY(Selection* selection READ selection WRITE setSelection NOTIFY selectionChanged)
 
 	Q_PROPERTY(QString title READ title WRITE setTitle NOTIFY titleChanged)
+	Q_PROPERTY(QString pinnedMessage READ pinnedMessage NOTIFY pinnedMessageChanged)
 
 	Q_OBJECT
 
 public:
-	explicit CanvasModel(int localUserId, QObject *parent = 0);
+	explicit CanvasModel(uint8_t localUserId, QObject *parent=nullptr);
 
 	paintcore::LayerStack *layerStack() const { return m_layerstack; }
 	StateTracker *stateTracker() const { return m_statetracker; }
@@ -70,24 +73,26 @@ public:
 	QString title() const { return m_title; }
 	void setTitle(const QString &title) { if(m_title!=title) { m_title = title; emit titleChanged(title); } }
 
+	QString pinnedMessage() const { return m_pinnedMessage; }
+
 	Selection *selection() const { return m_selection; }
 	void setSelection(Selection *selection);
 
 	bool needsOpenRaster() const;
-	QImage toImage() const;
-	bool save(const QString &filename) const;
+	QImage toImage(bool withBackground=true) const;
 
 	QList<protocol::MessagePtr> generateSnapshot(bool forceNew) const;
 
-	int localUserId() const;
+	uint8_t localUserId() const;
 
-	int getAvailableAnnotationId() const;
+	uint16_t getAvailableAnnotationId() const;
 
 	QImage selectionToImage(int layerId) const;
 	void pasteFromImage(const QImage &image, const QPoint &defaultPoint, bool forceDefault);
 
-	void connectedToServer(int myUserId);
+	void connectedToServer(uint8_t myUserId);
 	void disconnectedFromServer();
+	void startPlayback();
 	void endPlayback();
 
 	AclFilter *aclFilter() const { return m_aclfilter; }
@@ -99,7 +104,12 @@ public:
 	 *
 	 * This mainly affects how certain access controls are checked.
 	 */
-	bool isOnline() const { return m_onlinemode; }
+	bool isOnline() const { return m_mode == Mode::Online; }
+
+	/**
+	 * @brief Set the Writer to use for recording
+	 */
+	void setRecorder(recording::Writer *writer) { m_recorder = writer; }
 
 public slots:
 	//! Handle a meta/command message received from the server
@@ -110,6 +120,7 @@ public slots:
 
 	void resetCanvas();
 
+	void pickLayer(int x, int y);
 	void pickColor(int x, int y, int layer, int diameter=0);
 
 	void setLayerViewMode(int mode);
@@ -122,15 +133,16 @@ signals:
 	void selectionRemoved();
 
 	void titleChanged(QString title);
+	void pinnedMessageChanged(QString message);
 	void imageSizeChanged();
 
 	void colorPicked(const QColor &color);
 
-	void chatMessageReceived(const QString &nick, const protocol::MessagePtr &msg);
-	void markerMessageReceived(const QString &user, const QString &message);
+	void chatMessageReceived(const protocol::MessagePtr &msg);
+	void markerMessageReceived(int id, const QString &message);
 
 	void userJoined(int id, const QString &name);
-	void userLeft(const QString &name);
+	void userLeft(int id, const QString &name);
 
 	void canvasLocked(bool locked);
 
@@ -140,10 +152,12 @@ private slots:
 private:
 	void metaUserJoin(const protocol::UserJoin &msg);
 	void metaUserLeave(const protocol::UserLeave &msg);
+	void metaChatMessage(protocol::MessagePtr msg);
 	void metaLaserTrail(const protocol::LaserTrail &msg);
 	void metaMovePointer(const protocol::MovePointer &msg);
 	void metaMarkerMessage(const protocol::Marker &msg);
 	void metaDefaultLayer(const protocol::DefaultLayer &msg);
+	void metaSoftReset(uint8_t resetterId);
 
 	AclFilter *m_aclfilter;
 	UserListModel *m_userlist;
@@ -155,9 +169,12 @@ private:
 	LaserTrailModel *m_lasers;
 	Selection *m_selection;
 
-	QString m_title;
+	QPointer<recording::Writer> m_recorder;
 
-	bool m_onlinemode;
+	QString m_title;
+	QString m_pinnedMessage;
+
+	enum class Mode { Offline, Online, Playback } m_mode;
 };
 
 }

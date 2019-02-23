@@ -21,15 +21,16 @@
 namespace server {
 
 SessionHistory::SessionHistory(const QUuid &id, QObject *parent)
-	: QObject(parent), m_id(id), m_sizeInBytes(0), m_sizeLimit(0), m_firstIndex(0), m_lastIndex(-1)
+	: QObject(parent), m_id(id), m_sizeInBytes(0), m_sizeLimit(0), m_autoResetBaseSize(0),
+	  m_firstIndex(0), m_lastIndex(-1)
 {
 }
 
-bool SessionHistory::addBan(const QString &username, const QHostAddress &ip, const QString &bannedBy)
+bool SessionHistory::addBan(const QString &username, const QHostAddress &ip, const QString &extAuthId, const QString &bannedBy)
 {
-	const int id = m_banlist.addBan(username, ip, bannedBy);
+	const int id = m_banlist.addBan(username, ip, extAuthId, bannedBy);
 	if(id>0) {
-		historyAddBan(id, username, ip, bannedBy);
+		historyAddBan(id, username, ip, extAuthId, bannedBy);
 		return true;
 	}
 	return false;
@@ -53,16 +54,15 @@ void SessionHistory::historyLoaded(uint size, int messageCount)
 	Q_ASSERT(m_lastIndex==-1);
 	m_sizeInBytes = size;
 	m_lastIndex = messageCount - 1;
+	m_autoResetBaseSize = size;
 }
 
 bool SessionHistory::addMessage(const protocol::MessagePtr &msg)
 {
-	m_sizeInBytes += msg->length();
-	if(m_sizeLimit>0 && m_sizeInBytes > m_sizeLimit) {
-		m_sizeInBytes -= msg->length();
+	if(isOutOfSpace())
 		return false;
-	}
 
+	m_sizeInBytes += msg->length();
 	++m_lastIndex;
 	historyAdd(msg);
 	emit newMessagesAvailable();
@@ -81,9 +81,22 @@ bool SessionHistory::reset(const QList<protocol::MessagePtr> &newHistory)
 	m_sizeInBytes = newSize;
 	m_firstIndex = m_lastIndex + 1;
 	m_lastIndex += newHistory.size();
+	m_autoResetBaseSize = newSize;
 	historyReset(newHistory);
 	emit newMessagesAvailable();
 	return true;
+}
+
+uint SessionHistory::effectiveAutoResetThreshold() const
+{
+	uint t = autoResetThreshold();
+	// Zero means autoreset is not enabled
+	if(t>0) {
+		t += m_autoResetBaseSize;
+		if(m_sizeLimit>0)
+			t = qMin(t, uint(m_sizeLimit * 0.9));
+	}
+	return t;
 }
 
 }

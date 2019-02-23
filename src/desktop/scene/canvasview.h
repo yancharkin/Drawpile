@@ -1,7 +1,7 @@
 /*
    Drawpile - a collaborative drawing program.
 
-   Copyright (C) 2006-2014 Calle Laakkonen
+   Copyright (C) 2006-2018 Calle Laakkonen
 
    Drawpile is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -95,8 +95,9 @@ class CanvasView : public QGraphicsView
 		//! Pointer was just brought to the top of the widget border
 		void hotBorder(bool hot);
 
-		void penDown(const QPointF &point, qreal pressure);
+		void penDown(const QPointF &point, qreal pressure, bool right, float zoom);
 		void penMove(const QPointF &point, qreal pressure, bool shift, bool alt);
+		void penHover(const QPointF &point);
 		void penUp();
 		void quickAdjust(qreal value);
 
@@ -108,8 +109,8 @@ class CanvasView : public QGraphicsView
 		//! Set the size of the brush preview outline
 		void setOutlineSize(int size);
 
-		//! Enable subpixel precision for brush preview outline
-		void setOutlineSubpixelMode(bool subpixel);
+		//! Set subpixel precision mode and shape for brush preview outline
+		void setOutlineMode(bool subpixel, bool square);
 
 		//! Enable or disable pixel grid (shown only at high zoom levels)
 		void setPixelGrid(bool enable);
@@ -142,7 +143,23 @@ class CanvasView : public QGraphicsView
 		//! Decrease zoom factor
 		void zoomout();
 
+		//! Zoom the view it's filled by the given rectangle
+		//! If the rectangle is very small, or steps are negative, just zoom by that many steps
+		void zoomTo(const QRect &rect, int steps);
+
+		//! Zoom to fit the view
+		void zoomToFit();
+
 		void setToolCursor(const QCursor &cursor);
+
+		/**
+		 * @brief Set the cursor to use for brush tools
+		 * Styles:
+		 * 0. Dot
+		 * 1. Crosshair
+		 * 2. Arrow
+		 */
+		void setBrushCursorStyle(int style);
 
 	protected:
 		void enterEvent(QEvent *event);
@@ -211,7 +228,7 @@ class CanvasView : public QGraphicsView
 		enum {NOTDOWN, MOUSEDOWN, TABLETDOWN} _pendown;
 
 		//! If Ctrl is held, pen goes to "special" mode (which is currently quick color picker mode)
-		bool _specialpenmode;
+		enum { NOSPECIALPENMODE, COLORPICK, LAYERPICK} m_specialpenmode;
 
 		//! Is the view being dragged
 		ViewTransform _isdragging;
@@ -219,20 +236,21 @@ class CanvasView : public QGraphicsView
 		int _dragx,_dragy;
 
 		//! Previous pointer location
-		paintcore::Point m_firstpoint;
+		paintcore::Point m_firstPoint;
 		paintcore::Point _prevpoint;
 		paintcore::Point _prevoutlinepoint;
 		qreal _pointerdistance;
 		qreal _pointervelocity;
 		bool _prevshift;
 		bool _prevalt;
+		bool m_firstPointRight;
 
 		qreal _gestureStartZoom;
 		qreal _gestureStartAngle;
 
-		float _outlinesize;
-		bool _showoutline, _subpixeloutline;
-		QCursor _crosshaircursor, _colorpickcursor;
+		int m_outlineSize;
+		bool m_showoutline, m_subpixeloutline, m_squareoutline;
+		QCursor m_dotcursor, m_colorpickcursor;
 		QCursor m_toolcursor;
 
 		qreal _zoom; // View zoom in percents
@@ -258,10 +276,12 @@ class CanvasView : public QGraphicsView
 
 		bool _hotBorderTop;
 
+		bool m_isFirstPoint;
 		bool _enableTouchScroll, _enableTouchPinch, _enableTouchTwist;
 		bool _touching, _touchRotating;
 		qreal _touchStartZoom, _touchStartRotate;
 		qreal _dpi;
+		int m_brushCursorStyle;
 };
 
 }

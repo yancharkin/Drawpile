@@ -1,7 +1,7 @@
 /*
   Drawpile - a collaborative drawing program.
 
-  Copyright (C) 2015-2017 Calle Laakkonen
+  Copyright (C) 2015-2018 Calle Laakkonen
 
   Drawpile is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -22,13 +22,18 @@
 #include <QTextDocument>
 #include <QPainter>
 #include <QImage>
-#include <QSet> // for old-style change notifications
 
 namespace paintcore {
 
 AnnotationModel::AnnotationModel(QObject *parent)
 	: QAbstractListModel(parent)
 {
+}
+
+AnnotationModel::AnnotationModel(const AnnotationModel *orig, QObject *newParent)
+	: QAbstractListModel(newParent)
+{
+	m_annotations = orig->m_annotations;
 }
 
 int AnnotationModel::rowCount(const QModelIndex &parent) const
@@ -80,12 +85,12 @@ void AnnotationModel::addAnnotation(const Annotation &annotation)
 	endInsertRows();
 }
 
-void AnnotationModel::addAnnotation(int id, const QRect &rect)
+void AnnotationModel::addAnnotation(uint16_t id, const QRect &rect)
 {
 	addAnnotation(Annotation {id, QString(), rect, QColor(Qt::transparent), false, 0});
 }
 
-void AnnotationModel::deleteAnnotation(int id)
+void AnnotationModel::deleteAnnotation(uint16_t id)
 {
 	int idx = findById(id);
 	if(idx<0) {
@@ -98,7 +103,7 @@ void AnnotationModel::deleteAnnotation(int id)
 	endRemoveRows();
 }
 
-void AnnotationModel::reshapeAnnotation(int id, const QRect &newrect)
+void AnnotationModel::reshapeAnnotation(uint16_t id, const QRect &newrect)
 {
 	int idx = findById(id);
 	if(idx<0) {
@@ -110,7 +115,7 @@ void AnnotationModel::reshapeAnnotation(int id, const QRect &newrect)
 	emit dataChanged(index(idx), index(idx), QVector<int>() << RectRole);
 }
 
-void AnnotationModel::changeAnnotation(int id, const QString &newtext, bool protect, int valign, const QColor &bgcolor)
+void AnnotationModel::changeAnnotation(uint16_t id, const QString &newtext, bool protect, int valign, const QColor &bgcolor)
 {
 	int idx = findById(id);
 	if(idx<0) {
@@ -132,7 +137,7 @@ void AnnotationModel::setAnnotations(const QList<Annotation> &annotations)
 	endResetModel();
 }
 
-const Annotation *AnnotationModel::getById(int id) const
+const Annotation *AnnotationModel::getById(uint16_t id) const
 {
 	for(const Annotation &a : m_annotations)
 		if(a.id == id)
@@ -140,7 +145,7 @@ const Annotation *AnnotationModel::getById(int id) const
 	return nullptr;
 }
 
-int AnnotationModel::findById(int id) const
+int AnnotationModel::findById(uint16_t id) const
 {
 	for(int i=0;i<m_annotations.size();++i)
 		if(m_annotations.at(i).id == id)
@@ -163,7 +168,7 @@ const Annotation *AnnotationModel::annotationAtPos(const QPoint &pos, qreal zoom
 	return nullptr;
 }
 
-Annotation::Handle AnnotationModel::annotationHandleAt(int id, const QPoint &point, qreal zoom) const
+Annotation::Handle AnnotationModel::annotationHandleAt(uint16_t id, const QPoint &point, qreal zoom) const
 {
 	const Annotation *a = getById(id);
 	if(a)
@@ -171,7 +176,7 @@ Annotation::Handle AnnotationModel::annotationHandleAt(int id, const QPoint &poi
 	return Annotation::OUTSIDE;
 }
 
-Annotation::Handle AnnotationModel::annotationAdjustGeometry(int id, Annotation::Handle handle, const QPoint &delta)
+Annotation::Handle AnnotationModel::annotationAdjustGeometry(uint16_t id, Annotation::Handle handle, const QPoint &delta)
 {
 	for(int idx=0;idx<m_annotations.size();++idx) {
 		if(m_annotations.at(idx).id == id) {
@@ -183,9 +188,9 @@ Annotation::Handle AnnotationModel::annotationAdjustGeometry(int id, Annotation:
 	return Annotation::OUTSIDE;
 }
 
-QList<int> AnnotationModel::getEmptyIds() const
+QList<uint16_t> AnnotationModel::getEmptyIds() const
 {
-	QList<int> ids;
+	QList<uint16_t> ids;
 	for(const Annotation &a : m_annotations) {
 		if(a.isEmpty())
 			ids << a.id;
@@ -234,7 +239,7 @@ void Annotation::paint(QPainter *painter, const QRectF &paintrect) const
 
 QImage Annotation::toImage() const
 {
-	QImage img(rect.size(), QImage::Format_ARGB32);
+	QImage img(rect.size(), QImage::Format_ARGB32_Premultiplied);
 	img.fill(0);
 	QPainter painter(&img);
 	paint(&painter, QRectF(0, 0, rect.width(), rect.height()));
@@ -356,6 +361,13 @@ Annotation Annotation::fromDataStream(QDataStream &in)
 	QString text;
 	in >> text;
 	return Annotation {id, text, rect, color, protect, valign};
+}
+
+uint8_t Annotation::flags() const {
+	return
+		(protect ? protocol::AnnotationEdit::FLAG_PROTECT : 0) |
+		valign
+		;
 }
 
 int Annotation::valignFromString(const QString &va)
